@@ -14,6 +14,7 @@
 package com.facebook.presto;
 
 import com.facebook.presto.execution.QueryManagerConfig;
+import com.facebook.presto.execution.QueryManagerConfig.ExchangeMaterializationStrategy;
 import com.facebook.presto.execution.TaskManagerConfig;
 import com.facebook.presto.memory.MemoryManagerConfig;
 import com.facebook.presto.spi.PrestoException;
@@ -21,6 +22,7 @@ import com.facebook.presto.spi.session.PropertyMetadata;
 import com.facebook.presto.sql.analyzer.FeaturesConfig;
 import com.facebook.presto.sql.analyzer.FeaturesConfig.JoinDistributionType;
 import com.facebook.presto.sql.analyzer.FeaturesConfig.JoinReorderingStrategy;
+import com.facebook.presto.sql.analyzer.FeaturesConfig.PartialMergePushdownStrategy;
 import com.google.common.collect.ImmutableList;
 import io.airlift.units.DataSize;
 import io.airlift.units.Duration;
@@ -34,6 +36,7 @@ import java.util.stream.Stream;
 
 import static com.facebook.presto.spi.StandardErrorCode.INVALID_SESSION_PROPERTY;
 import static com.facebook.presto.spi.session.PropertyMetadata.booleanProperty;
+import static com.facebook.presto.spi.session.PropertyMetadata.doubleProperty;
 import static com.facebook.presto.spi.session.PropertyMetadata.integerProperty;
 import static com.facebook.presto.spi.session.PropertyMetadata.stringProperty;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
@@ -59,10 +62,15 @@ public final class SystemSessionProperties
     public static final String DISTRIBUTED_INDEX_JOIN = "distributed_index_join";
     public static final String HASH_PARTITION_COUNT = "hash_partition_count";
     public static final String PARTITIONING_PROVIDER_CATALOG = "partitioning_provider_catalog";
+    public static final String EXCHANGE_MATERIALIZATION_STRATEGY = "exchange_materialization_strategy";
     public static final String GROUPED_EXECUTION_FOR_AGGREGATION = "grouped_execution_for_aggregation";
+    public static final String GROUPED_EXECUTION_FOR_ELIGIBLE_TABLE_SCANS = "grouped_execution_for_eligible_table_scans";
     public static final String DYNAMIC_SCHEDULE_FOR_GROUPED_EXECUTION = "dynamic_schedule_for_grouped_execution";
+    public static final String RECOVERABLE_GROUPED_EXECUTION = "recoverable_grouped_execution";
+    public static final String MAX_FAILED_TASK_PERCENTAGE = "max_failed_task_percentage";
     public static final String PREFER_STREAMING_OPERATORS = "prefer_streaming_operators";
     public static final String TASK_WRITER_COUNT = "task_writer_count";
+    public static final String TASK_PARTITIONED_WRITER_COUNT = "task_partitioned_writer_count";
     public static final String TASK_CONCURRENCY = "task_concurrency";
     public static final String TASK_SHARE_INDEX_LOADING = "task_share_index_loading";
     public static final String QUERY_MAX_MEMORY = "query_max_memory";
@@ -85,6 +93,7 @@ public final class SystemSessionProperties
     public static final String CONCURRENT_LIFESPANS_PER_NODE = "concurrent_lifespans_per_task";
     public static final String REORDER_JOINS = "reorder_joins";
     public static final String JOIN_REORDERING_STRATEGY = "join_reordering_strategy";
+    public static final String PARTIAL_MERGE_PUSHDOWN_STRATEGY = "partial_merge_pushdown_strategy";
     public static final String MAX_REORDERED_JOINS = "max_reordered_joins";
     public static final String INITIAL_SPLITS_PER_NODE = "initial_splits_per_node";
     public static final String SPLIT_CONCURRENCY_ADJUSTMENT_INTERVAL = "split_concurrency_adjustment_interval";
@@ -119,6 +128,12 @@ public final class SystemSessionProperties
     public static final String MAX_DRIVERS_PER_TASK = "max_drivers_per_task";
     public static final String MAX_TASKS_PER_STAGE = "max_tasks_per_stage";
     public static final String DEFAULT_FILTER_FACTOR_ENABLED = "default_filter_factor_enabled";
+    public static final String PUSH_LIMIT_THROUGH_OUTER_JOIN = "push_limit_through_outer_join";
+    public static final String MAX_CONCURRENT_MATERIALIZATIONS = "max_concurrent_materializations";
+    public static final String PUSHDOWN_SUBFIELDS_ENABLED = "pushdown_subfields_enabled";
+    public static final String TABLE_WRITER_MERGE_OPERATOR_ENABLED = "table_writer_merge_operator_enabled";
+    public static final String OPTIMIZE_FULL_OUTER_JOIN_WITH_COALESCE = "optimize_full_outer_join_with_coalesce";
+    public static final String INDEX_LOADER_TIMEOUT = "index_loader_timeout";
 
     private final List<PropertyMetadata<?>> sessionProperties;
 
@@ -186,15 +201,42 @@ public final class SystemSessionProperties
                         "Name of the catalog providing custom partitioning",
                         queryManagerConfig.getPartitioningProviderCatalog(),
                         false),
+                new PropertyMetadata<>(
+                        EXCHANGE_MATERIALIZATION_STRATEGY,
+                        format("The exchange materialization strategy to use. Options are %s",
+                                Stream.of(ExchangeMaterializationStrategy.values())
+                                        .map(ExchangeMaterializationStrategy::name)
+                                        .collect(joining(","))),
+                        VARCHAR,
+                        ExchangeMaterializationStrategy.class,
+                        queryManagerConfig.getExchangeMaterializationStrategy(),
+                        false,
+                        value -> ExchangeMaterializationStrategy.valueOf(((String) value).toUpperCase()),
+                        ExchangeMaterializationStrategy::name),
                 booleanProperty(
                         GROUPED_EXECUTION_FOR_AGGREGATION,
                         "Use grouped execution for aggregation when possible",
                         featuresConfig.isGroupedExecutionForAggregationEnabled(),
                         false),
                 booleanProperty(
+                        GROUPED_EXECUTION_FOR_ELIGIBLE_TABLE_SCANS,
+                        "Experimental: Use grouped execution for eligible table scans",
+                        featuresConfig.isGroupedExecutionForEligibleTableScansEnabled(),
+                        false),
+                booleanProperty(
                         DYNAMIC_SCHEDULE_FOR_GROUPED_EXECUTION,
                         "Experimental: Use dynamic schedule for grouped execution when possible",
                         featuresConfig.isDynamicScheduleForGroupedExecutionEnabled(),
+                        false),
+                doubleProperty(
+                        MAX_FAILED_TASK_PERCENTAGE,
+                        "Max percentage of failed tasks that are retryable for recoverable dynamic scheduling",
+                        featuresConfig.getMaxFailedTaskPercentage(),
+                        false),
+                booleanProperty(
+                        RECOVERABLE_GROUPED_EXECUTION,
+                        "Experimental: Use recoverable grouped execution when possible",
+                        featuresConfig.isRecoverableGroupedExecutionEnabled(),
                         false),
                 booleanProperty(
                         PREFER_STREAMING_OPERATORS,
@@ -208,7 +250,16 @@ public final class SystemSessionProperties
                         Integer.class,
                         taskManagerConfig.getWriterCount(),
                         false,
-                        value -> validateValueIsPowerOfTwo(value, TASK_WRITER_COUNT),
+                        value -> validateValueIsPowerOfTwo(requireNonNull(value, "value is null"), TASK_WRITER_COUNT),
+                        value -> value),
+                new PropertyMetadata<>(
+                        TASK_PARTITIONED_WRITER_COUNT,
+                        "Number of writers per task for partitioned writes. If not set, the number set by task.writer-count will be used",
+                        BIGINT,
+                        Integer.class,
+                        taskManagerConfig.getPartitionedWriterCount(),
+                        false,
+                        value -> validateValueIsPowerOfTwo(value, TASK_PARTITIONED_WRITER_COUNT),
                         value -> value),
                 booleanProperty(
                         REDISTRIBUTE_WRITES,
@@ -241,7 +292,7 @@ public final class SystemSessionProperties
                         Integer.class,
                         taskManagerConfig.getTaskConcurrency(),
                         false,
-                        value -> validateValueIsPowerOfTwo(value, TASK_CONCURRENCY),
+                        value -> validateValueIsPowerOfTwo(requireNonNull(value, "value is null"), TASK_CONCURRENCY),
                         value -> value),
                 booleanProperty(
                         TASK_SHARE_INDEX_LOADING,
@@ -354,6 +405,18 @@ public final class SystemSessionProperties
                         false,
                         value -> JoinReorderingStrategy.valueOf(((String) value).toUpperCase()),
                         JoinReorderingStrategy::name),
+                new PropertyMetadata<>(
+                        PARTIAL_MERGE_PUSHDOWN_STRATEGY,
+                        format("Experimental: Partial merge pushdown strategy to use. Optionas are %s",
+                                Stream.of(PartialMergePushdownStrategy.values())
+                                        .map(PartialMergePushdownStrategy::name)
+                                        .collect(joining(","))),
+                        VARCHAR,
+                        PartialMergePushdownStrategy.class,
+                        featuresConfig.getPartialMergePushdownStrategy(),
+                        false,
+                        value -> PartialMergePushdownStrategy.valueOf(((String) value).toUpperCase()),
+                        PartialMergePushdownStrategy::name),
                 new PropertyMetadata<>(
                         MAX_REORDERED_JOINS,
                         "The maximum number of joins to reorder as one group in cost-based join reordering",
@@ -561,7 +624,41 @@ public final class SystemSessionProperties
                         DEFAULT_FILTER_FACTOR_ENABLED,
                         "use a default filter factor for unknown filters in a filter node",
                         featuresConfig.isDefaultFilterFactorEnabled(),
-                        false));
+                        false),
+                booleanProperty(
+                        PUSH_LIMIT_THROUGH_OUTER_JOIN,
+                        "push limits to the outer side of an outer join",
+                        featuresConfig.isPushLimitThroughOuterJoin(),
+                        false),
+                integerProperty(
+                        MAX_CONCURRENT_MATERIALIZATIONS,
+                        "Maximum number of materializing plan sections that can run concurrently",
+                        featuresConfig.getMaxConcurrentMaterializations(),
+                        false),
+                booleanProperty(
+                        PUSHDOWN_SUBFIELDS_ENABLED,
+                        "Experimental: enable subfield pruning",
+                        featuresConfig.isPushdownSubfieldsEnabled(),
+                        false),
+                booleanProperty(
+                        TABLE_WRITER_MERGE_OPERATOR_ENABLED,
+                        "Experimental: enable table writer merge operator",
+                        featuresConfig.isTableWriterMergeOperatorEnabled(),
+                        false),
+                booleanProperty(
+                        OPTIMIZE_FULL_OUTER_JOIN_WITH_COALESCE,
+                        "optimize partition properties for queries using COALESCE + FULL OUTER JOIN",
+                        featuresConfig.isOptimizeFullOuterJoinWithCoalesce(),
+                        false),
+                new PropertyMetadata<>(
+                        INDEX_LOADER_TIMEOUT,
+                        "Timeout for loading indexes for index joins",
+                        VARCHAR,
+                        Duration.class,
+                        featuresConfig.getIndexLoaderTimeout(),
+                        false,
+                        value -> Duration.valueOf((String) value),
+                        Duration::toString));
     }
 
     public List<PropertyMetadata<?>> getSessionProperties()
@@ -613,14 +710,34 @@ public final class SystemSessionProperties
         return session.getSystemProperty(PARTITIONING_PROVIDER_CATALOG, String.class);
     }
 
+    public static ExchangeMaterializationStrategy getExchangeMaterializationStrategy(Session session)
+    {
+        return session.getSystemProperty(EXCHANGE_MATERIALIZATION_STRATEGY, ExchangeMaterializationStrategy.class);
+    }
+
     public static boolean isGroupedExecutionForAggregationEnabled(Session session)
     {
         return session.getSystemProperty(GROUPED_EXECUTION_FOR_AGGREGATION, Boolean.class);
     }
 
-    public static boolean isDynamicSchduleForGroupedExecution(Session session)
+    public static boolean isGroupedExecutionForEligibleTableScansEnabled(Session session)
+    {
+        return session.getSystemProperty(GROUPED_EXECUTION_FOR_ELIGIBLE_TABLE_SCANS, Boolean.class);
+    }
+
+    public static boolean isDynamicScheduleForGroupedExecution(Session session)
     {
         return session.getSystemProperty(DYNAMIC_SCHEDULE_FOR_GROUPED_EXECUTION, Boolean.class);
+    }
+
+    public static boolean isRecoverableGroupedExecutionEnabled(Session session)
+    {
+        return session.getSystemProperty(RECOVERABLE_GROUPED_EXECUTION, Boolean.class);
+    }
+
+    public static double getMaxFailedTaskPercentage(Session session)
+    {
+        return session.getSystemProperty(MAX_FAILED_TASK_PERCENTAGE, Double.class);
     }
 
     public static boolean preferStreamingOperators(Session session)
@@ -631,6 +748,15 @@ public final class SystemSessionProperties
     public static int getTaskWriterCount(Session session)
     {
         return session.getSystemProperty(TASK_WRITER_COUNT, Integer.class);
+    }
+
+    public static int getTaskPartitionedWriterCount(Session session)
+    {
+        Integer partitionedWriterCount = session.getSystemProperty(TASK_PARTITIONED_WRITER_COUNT, Integer.class);
+        if (partitionedWriterCount != null) {
+            return partitionedWriterCount;
+        }
+        return getTaskWriterCount(session);
     }
 
     public static boolean isRedistributeWrites(Session session)
@@ -723,6 +849,11 @@ public final class SystemSessionProperties
             return ELIMINATE_CROSS_JOINS;
         }
         return session.getSystemProperty(JOIN_REORDERING_STRATEGY, JoinReorderingStrategy.class);
+    }
+
+    public static PartialMergePushdownStrategy getPartialMergePushdownStrategy(Session session)
+    {
+        return session.getSystemProperty(PARTIAL_MERGE_PUSHDOWN_STRATEGY, PartialMergePushdownStrategy.class);
     }
 
     public static int getMaxReorderedJoins(Session session)
@@ -901,9 +1032,13 @@ public final class SystemSessionProperties
         return session.getSystemProperty(MAX_TASKS_PER_STAGE, Integer.class);
     }
 
-    private static int validateValueIsPowerOfTwo(Object value, String property)
+    private static Integer validateValueIsPowerOfTwo(Object value, String property)
     {
-        int intValue = ((Number) requireNonNull(value, "value is null")).intValue();
+        Number number = (Number) value;
+        if (number == null) {
+            return null;
+        }
+        int intValue = number.intValue();
         if (Integer.bitCount(intValue) != 1) {
             throw new PrestoException(
                     INVALID_SESSION_PROPERTY,
@@ -957,5 +1092,35 @@ public final class SystemSessionProperties
     public static boolean isDefaultFilterFactorEnabled(Session session)
     {
         return session.getSystemProperty(DEFAULT_FILTER_FACTOR_ENABLED, Boolean.class);
+    }
+
+    public static boolean isPushLimitThroughOuterJoin(Session session)
+    {
+        return session.getSystemProperty(PUSH_LIMIT_THROUGH_OUTER_JOIN, Boolean.class);
+    }
+
+    public static int getMaxConcurrentMaterializations(Session session)
+    {
+        return session.getSystemProperty(MAX_CONCURRENT_MATERIALIZATIONS, Integer.class);
+    }
+
+    public static boolean isPushdownSubfieldsEnabled(Session session)
+    {
+        return session.getSystemProperty(PUSHDOWN_SUBFIELDS_ENABLED, Boolean.class);
+    }
+
+    public static boolean isTableWriterMergeOperatorEnabled(Session session)
+    {
+        return session.getSystemProperty(TABLE_WRITER_MERGE_OPERATOR_ENABLED, Boolean.class);
+    }
+
+    public static boolean isOptimizeFullOuterJoinWithCoalesce(Session session)
+    {
+        return session.getSystemProperty(OPTIMIZE_FULL_OUTER_JOIN_WITH_COALESCE, Boolean.class);
+    }
+
+    public static Duration getIndexLoaderTimeout(Session session)
+    {
+        return session.getSystemProperty(INDEX_LOADER_TIMEOUT, Duration.class);
     }
 }

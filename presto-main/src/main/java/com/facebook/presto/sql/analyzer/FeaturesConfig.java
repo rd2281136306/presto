@@ -43,6 +43,7 @@ import static com.google.common.collect.ImmutableList.toImmutableList;
 import static io.airlift.units.DataSize.Unit.KILOBYTE;
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.MINUTES;
+import static java.util.concurrent.TimeUnit.SECONDS;
 
 @DefunctConfig({
         "resource-group-manager",
@@ -67,11 +68,15 @@ public class FeaturesConfig
     private DataSize joinMaxBroadcastTableSize;
     private boolean colocatedJoinsEnabled;
     private boolean groupedExecutionForAggregationEnabled;
+    private boolean groupedExecutionForEligibleTableScansEnabled;
     private boolean dynamicScheduleForGroupedExecution;
+    private boolean recoverableGroupedExecutionEnabled;
+    private double maxFailedTaskPercentage = 0.3;
     private int concurrentLifespansPerTask;
     private boolean spatialJoinsEnabled = true;
     private boolean fastInequalityJoins = true;
     private JoinReorderingStrategy joinReorderingStrategy = ELIMINATE_CROSS_JOINS;
+    private PartialMergePushdownStrategy partialMergePushdownStrategy = PartialMergePushdownStrategy.NONE;
     private int maxReorderedJoins = 9;
     private boolean redistributeWrites = true;
     private boolean scaleWriters;
@@ -118,6 +123,8 @@ public class FeaturesConfig
     private boolean useMarkDistinct = true;
     private boolean preferPartialAggregation = true;
     private boolean optimizeTopNRowNumber = true;
+    private boolean pushLimitThroughOuterJoin = true;
+    private boolean optimizeFullOuterJoinWithCoalesce = true;
 
     private Duration iterativeOptimizerTimeout = new Duration(3, MINUTES); // by default let optimizer wait a long time in case it retrieves some data from ConnectorMetadata
 
@@ -127,6 +134,13 @@ public class FeaturesConfig
     private boolean legacyUnnestArrayRows;
 
     private boolean jsonSerdeCodeGenerationEnabled;
+    private int maxConcurrentMaterializations = 3;
+
+    private boolean pushdownSubfieldsEnabled;
+
+    private boolean tableWriterMergeOperatorEnabled = true;
+
+    private Duration indexLoaderTimeout = new Duration(20, SECONDS);
 
     public enum JoinReorderingStrategy
     {
@@ -150,6 +164,12 @@ public class FeaturesConfig
         {
             return this == BROADCAST || this == AUTOMATIC;
         }
+    }
+
+    public enum PartialMergePushdownStrategy
+    {
+        NONE,
+        PUSH_THROUGH_LOW_MEMORY_OPERATORS
     }
 
     public double getCpuCostWeight()
@@ -321,6 +341,19 @@ public class FeaturesConfig
         return this;
     }
 
+    public boolean isGroupedExecutionForEligibleTableScansEnabled()
+    {
+        return groupedExecutionForEligibleTableScansEnabled;
+    }
+
+    @Config("experimental.grouped-execution-for-eligible-table-scans-enabled")
+    @ConfigDescription("Experimental: Use grouped execution for eligible table scans")
+    public FeaturesConfig setGroupedExecutionForEligibleTableScansEnabled(boolean groupedExecutionForEligibleTableScansEnabled)
+    {
+        this.groupedExecutionForEligibleTableScansEnabled = groupedExecutionForEligibleTableScansEnabled;
+        return this;
+    }
+
     public boolean isDynamicScheduleForGroupedExecutionEnabled()
     {
         return dynamicScheduleForGroupedExecution;
@@ -331,6 +364,32 @@ public class FeaturesConfig
     public FeaturesConfig setDynamicScheduleForGroupedExecutionEnabled(boolean dynamicScheduleForGroupedExecution)
     {
         this.dynamicScheduleForGroupedExecution = dynamicScheduleForGroupedExecution;
+        return this;
+    }
+
+    public boolean isRecoverableGroupedExecutionEnabled()
+    {
+        return recoverableGroupedExecutionEnabled;
+    }
+
+    @Config("recoverable-grouped-execution-enabled")
+    @ConfigDescription("Use recoverable grouped execution when possible")
+    public FeaturesConfig setRecoverableGroupedExecutionEnabled(boolean recoverableGroupedExecutionEnabled)
+    {
+        this.recoverableGroupedExecutionEnabled = recoverableGroupedExecutionEnabled;
+        return this;
+    }
+
+    public double getMaxFailedTaskPercentage()
+    {
+        return maxFailedTaskPercentage;
+    }
+
+    @Config("max-failed-task-percentage")
+    @ConfigDescription("Max percentage of failed tasks that are retryable for recoverable dynamic scheduling")
+    public FeaturesConfig setMaxFailedTaskPercentage(double maxFailedTaskPercentage)
+    {
+        this.maxFailedTaskPercentage = maxFailedTaskPercentage;
         return this;
     }
 
@@ -398,6 +457,18 @@ public class FeaturesConfig
     public FeaturesConfig setJoinReorderingStrategy(JoinReorderingStrategy joinReorderingStrategy)
     {
         this.joinReorderingStrategy = joinReorderingStrategy;
+        return this;
+    }
+
+    public PartialMergePushdownStrategy getPartialMergePushdownStrategy()
+    {
+        return partialMergePushdownStrategy;
+    }
+
+    @Config("experimental.optimizer.partial-merge-pushdown-strategy")
+    public FeaturesConfig setPartialMergePushdownStrategy(PartialMergePushdownStrategy partialMergePushdownStrategy)
+    {
+        this.partialMergePushdownStrategy = partialMergePushdownStrategy;
         return this;
     }
 
@@ -939,5 +1010,81 @@ public class FeaturesConfig
     public boolean isJsonSerdeCodeGenerationEnabled()
     {
         return jsonSerdeCodeGenerationEnabled;
+    }
+
+    @Config("optimizer.push-limit-through-outer-join")
+    public FeaturesConfig setPushLimitThroughOuterJoin(boolean pushLimitThroughOuterJoin)
+    {
+        this.pushLimitThroughOuterJoin = pushLimitThroughOuterJoin;
+        return this;
+    }
+
+    public boolean isPushLimitThroughOuterJoin()
+    {
+        return pushLimitThroughOuterJoin;
+    }
+
+    @Config("max-concurrent-materializations")
+    @Min(1)
+    @ConfigDescription("The maximum number of materializing plan sections that can run concurrently")
+    public FeaturesConfig setMaxConcurrentMaterializations(int maxConcurrentMaterializations)
+    {
+        this.maxConcurrentMaterializations = maxConcurrentMaterializations;
+        return this;
+    }
+
+    public int getMaxConcurrentMaterializations()
+    {
+        return maxConcurrentMaterializations;
+    }
+
+    @Config("experimental.pushdown-subfields-enabled")
+    @ConfigDescription("Experimental: enable subfield pruning")
+    public FeaturesConfig setPushdownSubfieldsEnabled(boolean pushdownSubfieldsEnabled)
+    {
+        this.pushdownSubfieldsEnabled = pushdownSubfieldsEnabled;
+        return this;
+    }
+
+    public boolean isPushdownSubfieldsEnabled()
+    {
+        return pushdownSubfieldsEnabled;
+    }
+
+    public boolean isTableWriterMergeOperatorEnabled()
+    {
+        return tableWriterMergeOperatorEnabled;
+    }
+
+    @Config("experimental.table-writer-merge-operator-enabled")
+    public FeaturesConfig setTableWriterMergeOperatorEnabled(boolean tableWriterMergeOperatorEnabled)
+    {
+        this.tableWriterMergeOperatorEnabled = tableWriterMergeOperatorEnabled;
+        return this;
+    }
+
+    @Config("optimizer.optimize-full-outer-join-with-coalesce")
+    public FeaturesConfig setOptimizeFullOuterJoinWithCoalesce(boolean optimizeFullOuterJoinWithCoalesce)
+    {
+        this.optimizeFullOuterJoinWithCoalesce = optimizeFullOuterJoinWithCoalesce;
+        return this;
+    }
+
+    public Boolean isOptimizeFullOuterJoinWithCoalesce()
+    {
+        return this.optimizeFullOuterJoinWithCoalesce;
+    }
+
+    @Config("index-loader-timeout")
+    @ConfigDescription("Time limit for loading indexes for index joins")
+    public FeaturesConfig setIndexLoaderTimeout(Duration indexLoaderTimeout)
+    {
+        this.indexLoaderTimeout = indexLoaderTimeout;
+        return this;
+    }
+
+    public Duration getIndexLoaderTimeout()
+    {
+        return this.indexLoaderTimeout;
     }
 }

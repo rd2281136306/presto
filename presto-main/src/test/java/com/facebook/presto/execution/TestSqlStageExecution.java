@@ -15,25 +15,22 @@ package com.facebook.presto.execution;
 
 import com.facebook.presto.client.NodeVersion;
 import com.facebook.presto.cost.StatsAndCosts;
-import com.facebook.presto.execution.TestSqlTaskManager.MockLocationFactory;
 import com.facebook.presto.execution.scheduler.SplitSchedulerStats;
 import com.facebook.presto.failureDetector.NoOpFailureDetector;
-import com.facebook.presto.metadata.PrestoNode;
+import com.facebook.presto.metadata.InternalNode;
 import com.facebook.presto.operator.StageExecutionDescriptor;
-import com.facebook.presto.spi.Node;
 import com.facebook.presto.spi.QueryId;
-import com.facebook.presto.spi.type.Type;
+import com.facebook.presto.spi.plan.PlanNode;
+import com.facebook.presto.spi.plan.PlanNodeId;
+import com.facebook.presto.spi.relation.VariableReferenceExpression;
 import com.facebook.presto.sql.planner.Partitioning;
 import com.facebook.presto.sql.planner.PartitioningScheme;
 import com.facebook.presto.sql.planner.PlanFragment;
-import com.facebook.presto.sql.planner.Symbol;
 import com.facebook.presto.sql.planner.plan.PlanFragmentId;
-import com.facebook.presto.sql.planner.plan.PlanNode;
-import com.facebook.presto.sql.planner.plan.PlanNodeId;
 import com.facebook.presto.sql.planner.plan.RemoteSourceNode;
 import com.facebook.presto.util.FinalizerService;
 import com.google.common.collect.ImmutableList;
-import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.ImmutableSet;
 import com.google.common.util.concurrent.SettableFuture;
 import org.testng.annotations.AfterClass;
 import org.testng.annotations.BeforeClass;
@@ -102,8 +99,7 @@ public class TestSqlStageExecution
 
         StageId stageId = new StageId(new QueryId("query"), 0);
         SqlStageExecution stage = createSqlStageExecution(
-                stageId,
-                new MockLocationFactory().createStageLocation(stageId),
+                new StageExecutionId(stageId, 0),
                 createExchangePlanFragment(),
                 new MockRemoteTaskFactory(executor, scheduledExecutor),
                 TEST_SESSION,
@@ -115,7 +111,7 @@ public class TestSqlStageExecution
         stage.setOutputBuffers(createInitialEmptyOutputBuffers(ARBITRARY));
 
         // add listener that fetches stage info when the final status is available
-        SettableFuture<StageInfo> finalStageInfo = SettableFuture.create();
+        SettableFuture<StageExecutionInfo> finalStageInfo = SettableFuture.create();
         stage.addFinalStageInfoListener(finalStageInfo::set);
 
         // in a background thread add a ton of tasks
@@ -126,7 +122,7 @@ public class TestSqlStageExecution
                     if (Thread.interrupted()) {
                         return;
                     }
-                    Node node = new PrestoNode(
+                    InternalNode node = new InternalNode(
                             "source" + i,
                             URI.create("http://10.0.0." + (i / 10_000) + ":" + (i % 10_000)),
                             NodeVersion.UNKNOWN,
@@ -144,14 +140,14 @@ public class TestSqlStageExecution
 
         // wait for some tasks to be created, and then abort the query
         latch.await(1, MINUTES);
-        assertFalse(stage.getStageInfo().getTasks().isEmpty());
+        assertFalse(stage.getStageExecutionInfo().getTasks().isEmpty());
         stage.abort();
 
         // once the final stage info is available, verify that it is complete
-        StageInfo stageInfo = finalStageInfo.get(1, MINUTES);
+        StageExecutionInfo stageInfo = finalStageInfo.get(1, MINUTES);
         assertFalse(stageInfo.getTasks().isEmpty());
-        assertTrue(stageInfo.isCompleteInfo());
-        assertSame(stage.getStageInfo(), stageInfo);
+        assertTrue(stageInfo.isFinal());
+        assertSame(stage.getStageExecutionInfo(), stageInfo);
 
         // cancel the background thread adding tasks
         addTasksTask.cancel(true);
@@ -161,23 +157,20 @@ public class TestSqlStageExecution
     {
         PlanNode planNode = new RemoteSourceNode(
                 new PlanNodeId("exchange"),
-                ImmutableList.of(new PlanFragmentId("source")),
-                ImmutableList.of(new Symbol("column")),
+                ImmutableList.of(new PlanFragmentId(0)),
+                ImmutableList.of(new VariableReferenceExpression("column", VARCHAR)),
                 Optional.empty(),
                 REPARTITION);
 
-        ImmutableMap.Builder<Symbol, Type> types = ImmutableMap.builder();
-        for (Symbol symbol : planNode.getOutputSymbols()) {
-            types.put(symbol, VARCHAR);
-        }
         return new PlanFragment(
-                new PlanFragmentId("exchange_fragment_id"),
+                new PlanFragmentId(0),
                 planNode,
-                types.build(),
+                ImmutableSet.copyOf(planNode.getOutputVariables()),
                 SOURCE_DISTRIBUTION,
                 ImmutableList.of(planNode.getId()),
-                new PartitioningScheme(Partitioning.create(SINGLE_DISTRIBUTION, ImmutableList.of()), planNode.getOutputSymbols()),
+                new PartitioningScheme(Partitioning.create(SINGLE_DISTRIBUTION, ImmutableList.of()), planNode.getOutputVariables()),
                 StageExecutionDescriptor.ungroupedExecution(),
+                false,
                 StatsAndCosts.empty(),
                 Optional.empty());
     }

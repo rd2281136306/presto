@@ -16,7 +16,7 @@ package com.facebook.presto.execution.scheduler.group;
 import com.facebook.presto.execution.Lifespan;
 import com.facebook.presto.execution.scheduler.BucketNodeMap;
 import com.facebook.presto.execution.scheduler.SourceScheduler;
-import com.facebook.presto.spi.Node;
+import com.facebook.presto.metadata.InternalNode;
 import com.facebook.presto.spi.connector.ConnectorPartitionHandle;
 import com.google.common.collect.ImmutableList;
 import com.google.common.util.concurrent.SettableFuture;
@@ -47,26 +47,27 @@ import static java.util.Objects.requireNonNull;
 public class FixedLifespanScheduler
         implements LifespanScheduler
 {
-    private final Int2ObjectMap<Node> driverGroupToNodeMap;
-    private final Map<Node, IntListIterator> nodeToDriverGroupsMap;
+    private final Int2ObjectMap<InternalNode> driverGroupToNodeMap;
+    private final Map<InternalNode, IntListIterator> nodeToDriverGroupsMap;
     private final List<ConnectorPartitionHandle> partitionHandles;
     private final OptionalInt concurrentLifespansPerTask;
 
     private boolean initialScheduled;
     private SettableFuture<?> newDriverGroupReady = SettableFuture.create();
     @GuardedBy("this")
-    private final List<Lifespan> recentlyCompletedDriverGroups = new ArrayList<>();
-    private int totalDriverGroupsScheduled;
+    private final List<Lifespan> recentlyCompletelyExecutedDriverGroups = new ArrayList<>();
+    @GuardedBy("this")
+    private int totalLifespanExecutionFinished;
 
     public FixedLifespanScheduler(BucketNodeMap bucketNodeMap, List<ConnectorPartitionHandle> partitionHandles, OptionalInt concurrentLifespansPerTask)
     {
         checkArgument(!partitionHandles.equals(ImmutableList.of(NOT_PARTITIONED)));
         checkArgument(partitionHandles.size() == bucketNodeMap.getBucketCount());
 
-        Map<Node, IntList> nodeToDriverGroupMap = new HashMap<>();
-        Int2ObjectMap<Node> driverGroupToNodeMap = new Int2ObjectOpenHashMap<>();
+        Map<InternalNode, IntList> nodeToDriverGroupMap = new HashMap<>();
+        Int2ObjectMap<InternalNode> driverGroupToNodeMap = new Int2ObjectOpenHashMap<>();
         for (int bucket = 0; bucket < bucketNodeMap.getBucketCount(); bucket++) {
-            Node node = bucketNodeMap.getAssignedNode(bucket).get();
+            InternalNode node = bucketNodeMap.getAssignedNode(bucket).get();
             nodeToDriverGroupMap.computeIfAbsent(node, key -> new IntArrayList()).add(bucket);
             driverGroupToNodeMap.put(bucket, node);
         }
@@ -86,40 +87,42 @@ public class FixedLifespanScheduler
         checkState(!initialScheduled);
         initialScheduled = true;
 
-        for (Map.Entry<Node, IntListIterator> entry : nodeToDriverGroupsMap.entrySet()) {
+        for (Map.Entry<InternalNode, IntListIterator> entry : nodeToDriverGroupsMap.entrySet()) {
             IntListIterator driverGroupsIterator = entry.getValue();
             int driverGroupsScheduled = 0;
             while (driverGroupsIterator.hasNext()) {
                 int driverGroupId = driverGroupsIterator.nextInt();
                 scheduler.startLifespan(Lifespan.driverGroup(driverGroupId), partitionHandles.get(driverGroupId));
 
-                totalDriverGroupsScheduled++;
                 driverGroupsScheduled++;
                 if (concurrentLifespansPerTask.isPresent() && driverGroupsScheduled == concurrentLifespansPerTask.getAsInt()) {
                     break;
                 }
             }
         }
-
-        verify(totalDriverGroupsScheduled <= driverGroupToNodeMap.size());
-        if (totalDriverGroupsScheduled == driverGroupToNodeMap.size()) {
-            scheduler.noMoreLifespans();
-        }
     }
 
-    public void onLifespanFinished(Iterable<Lifespan> newlyCompletedDriverGroups)
+    public void onLifespanExecutionFinished(Iterable<Lifespan> newlyCompletelyExecutedDriverGroups)
     {
         checkState(initialScheduled);
 
         SettableFuture<?> newDriverGroupReady;
         synchronized (this) {
-            for (Lifespan newlyCompletedDriverGroup : newlyCompletedDriverGroups) {
-                checkArgument(!newlyCompletedDriverGroup.isTaskWide());
-                recentlyCompletedDriverGroups.add(newlyCompletedDriverGroup);
+            for (Lifespan newlyCompletelyExecutedDriverGroup : newlyCompletelyExecutedDriverGroups) {
+                checkArgument(!newlyCompletelyExecutedDriverGroup.isTaskWide());
+                recentlyCompletelyExecutedDriverGroups.add(newlyCompletelyExecutedDriverGroup);
+                totalLifespanExecutionFinished++;
             }
             newDriverGroupReady = this.newDriverGroupReady;
         }
         newDriverGroupReady.set(null);
+        verify(totalLifespanExecutionFinished <= partitionHandles.size());
+    }
+
+    @Override
+    public void onTaskFailed(int taskId, List<SourceScheduler> sourceSchedulers)
+    {
+        throw new UnsupportedOperationException("onTaskFailed is not supported in FixedLifespanScheduler");
     }
 
     public SettableFuture schedule(SourceScheduler scheduler)
@@ -131,8 +134,8 @@ public class FixedLifespanScheduler
 
         List<Lifespan> recentlyCompletedDriverGroups;
         synchronized (this) {
-            recentlyCompletedDriverGroups = ImmutableList.copyOf(this.recentlyCompletedDriverGroups);
-            this.recentlyCompletedDriverGroups.clear();
+            recentlyCompletedDriverGroups = ImmutableList.copyOf(this.recentlyCompletelyExecutedDriverGroups);
+            this.recentlyCompletelyExecutedDriverGroups.clear();
             newDriverGroupReady = SettableFuture.create();
         }
 
@@ -143,14 +146,14 @@ public class FixedLifespanScheduler
             }
             int driverGroupId = driverGroupsIterator.nextInt();
             scheduler.startLifespan(Lifespan.driverGroup(driverGroupId), partitionHandles.get(driverGroupId));
-            totalDriverGroupsScheduled++;
-        }
-
-        verify(totalDriverGroupsScheduled <= driverGroupToNodeMap.size());
-        if (totalDriverGroupsScheduled == driverGroupToNodeMap.size()) {
-            scheduler.noMoreLifespans();
         }
 
         return newDriverGroupReady;
+    }
+
+    @Override
+    public synchronized boolean allLifespanExecutionFinished()
+    {
+        return totalLifespanExecutionFinished == partitionHandles.size();
     }
 }

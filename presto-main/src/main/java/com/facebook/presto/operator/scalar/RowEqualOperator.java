@@ -33,6 +33,7 @@ import static com.facebook.presto.spi.function.OperatorType.EQUAL;
 import static com.facebook.presto.spi.function.Signature.comparableWithVariadicBound;
 import static com.facebook.presto.spi.type.TypeSignature.parseTypeSignature;
 import static com.facebook.presto.spi.type.TypeUtils.readNativeValue;
+import static com.facebook.presto.sql.analyzer.TypeSignatureProvider.fromTypes;
 import static com.facebook.presto.util.Failures.internalError;
 import static com.facebook.presto.util.Reflection.methodHandle;
 import static com.google.common.collect.ImmutableList.toImmutableList;
@@ -63,8 +64,7 @@ public class RowEqualOperator
                         valueTypeArgumentProperty(RETURN_NULL_ON_NULL)),
                 METHOD_HANDLE
                         .bindTo(type)
-                        .bindTo(resolveFieldEqualOperators(type, functionManager)),
-                isDeterministic());
+                        .bindTo(resolveFieldEqualOperators(type, functionManager)));
     }
 
     public static List<MethodHandle> resolveFieldEqualOperators(RowType rowType, FunctionManager functionManager)
@@ -76,7 +76,7 @@ public class RowEqualOperator
 
     private static MethodHandle resolveEqualOperator(Type type, FunctionManager functionManager)
     {
-        FunctionHandle operator = functionManager.resolveOperator(EQUAL, ImmutableList.of(type, type));
+        FunctionHandle operator = functionManager.resolveOperator(EQUAL, fromTypes(type, type));
         ScalarFunctionImplementation implementation = functionManager.getScalarFunctionImplementation(operator);
         return implementation.getMethodHandle();
     }

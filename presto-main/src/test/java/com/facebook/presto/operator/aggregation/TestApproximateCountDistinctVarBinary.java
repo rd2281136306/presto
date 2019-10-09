@@ -14,12 +14,10 @@
 package com.facebook.presto.operator.aggregation;
 
 import com.facebook.presto.spi.type.Type;
-import com.facebook.presto.sql.tree.QualifiedName;
 import io.airlift.slice.Slices;
 
 import java.util.concurrent.ThreadLocalRandom;
 
-import static com.facebook.presto.SessionTestUtils.TEST_SESSION;
 import static com.facebook.presto.spi.type.DoubleType.DOUBLE;
 import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
 import static com.facebook.presto.sql.analyzer.TypeSignatureProvider.fromTypes;
@@ -31,7 +29,7 @@ public class TestApproximateCountDistinctVarBinary
     public InternalAggregationFunction getAggregationFunction()
     {
         return functionManager.getAggregateFunctionImplementation(
-                functionManager.resolveFunction(TEST_SESSION, QualifiedName.of("approx_distinct"), fromTypes(VARCHAR, DOUBLE)));
+                functionManager.lookupFunction("approx_distinct", fromTypes(VARCHAR, DOUBLE)));
     }
 
     @Override

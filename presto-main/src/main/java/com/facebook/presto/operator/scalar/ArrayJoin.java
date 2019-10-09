@@ -25,6 +25,7 @@ import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.block.BlockBuilder;
 import com.facebook.presto.spi.function.FunctionKind;
 import com.facebook.presto.spi.function.Signature;
+import com.facebook.presto.spi.relation.FullyQualifiedName;
 import com.facebook.presto.spi.type.StandardTypes;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.spi.type.TypeManager;
@@ -40,12 +41,13 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
+import static com.facebook.presto.metadata.BuiltInFunctionNamespaceManager.DEFAULT_NAMESPACE;
+import static com.facebook.presto.metadata.CastType.CAST;
 import static com.facebook.presto.operator.scalar.ScalarFunctionImplementation.ArgumentProperty.valueTypeArgumentProperty;
 import static com.facebook.presto.operator.scalar.ScalarFunctionImplementation.NullConvention.RETURN_NULL_ON_NULL;
 import static com.facebook.presto.operator.scalar.ScalarFunctionImplementation.NullConvention.USE_BOXED_TYPE;
 import static com.facebook.presto.spi.StandardErrorCode.GENERIC_INTERNAL_ERROR;
 import static com.facebook.presto.spi.StandardErrorCode.INVALID_FUNCTION_ARGUMENT;
-import static com.facebook.presto.spi.function.OperatorType.CAST;
 import static com.facebook.presto.spi.function.Signature.typeVariable;
 import static com.facebook.presto.spi.type.TypeSignature.parseTypeSignature;
 import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
@@ -93,7 +95,8 @@ public final class ArrayJoin
 
         public ArrayJoinWithNullReplacement()
         {
-            super(new Signature(FUNCTION_NAME,
+            super(new Signature(
+                    FullyQualifiedName.of(DEFAULT_NAMESPACE, FUNCTION_NAME),
                     FunctionKind.SCALAR,
                     ImmutableList.of(typeVariable("T")),
                     ImmutableList.of(),
@@ -129,7 +132,8 @@ public final class ArrayJoin
 
     public ArrayJoin()
     {
-        super(new Signature(FUNCTION_NAME,
+        super(new Signature(
+                FullyQualifiedName.of(DEFAULT_NAMESPACE, FUNCTION_NAME),
                 FunctionKind.SCALAR,
                 ImmutableList.of(typeVariable("T")),
                 ImmutableList.of(),
@@ -182,8 +186,7 @@ public final class ArrayJoin
                     false,
                     argumentProperties,
                     methodHandle.bindTo(null),
-                    Optional.of(STATE_FACTORY),
-                    true);
+                    Optional.of(STATE_FACTORY));
         }
         else {
             try {
@@ -227,8 +230,7 @@ public final class ArrayJoin
                         false,
                         argumentProperties,
                         target,
-                        Optional.of(STATE_FACTORY),
-                        true);
+                        Optional.of(STATE_FACTORY));
             }
             catch (PrestoException e) {
                 throw new PrestoException(INVALID_FUNCTION_ARGUMENT, format("Input type %s not supported", type), e);

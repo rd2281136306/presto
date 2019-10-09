@@ -15,6 +15,7 @@
 package com.facebook.presto.execution;
 
 import com.facebook.presto.Session;
+import com.facebook.presto.execution.TestSqlTaskManager.MockExchangeClientSupplier;
 import com.facebook.presto.execution.executor.TaskExecutor;
 import com.facebook.presto.memory.MemoryPool;
 import com.facebook.presto.memory.QueryContext;
@@ -25,9 +26,9 @@ import com.facebook.presto.operator.PipelineContext;
 import com.facebook.presto.operator.TaskContext;
 import com.facebook.presto.spi.QueryId;
 import com.facebook.presto.spi.memory.MemoryPoolId;
+import com.facebook.presto.spi.plan.PlanNodeId;
 import com.facebook.presto.spiller.SpillSpaceTracker;
 import com.facebook.presto.sql.planner.LocalExecutionPlanner;
-import com.facebook.presto.sql.planner.plan.PlanNodeId;
 import com.facebook.presto.testing.TestingSession;
 import com.google.common.base.Functions;
 import com.google.common.base.Ticker;
@@ -118,7 +119,7 @@ public class TestMemoryRevokingScheduler
         SqlTask sqlTask1 = newSqlTask();
         SqlTask sqlTask2 = newSqlTask();
 
-        TaskContext taskContext1 = sqlTask1.getQueryContext().addTaskContext(new TaskStateMachine(new TaskId("q1", 1, 1), executor), session, false, false, OptionalInt.empty(), false);
+        TaskContext taskContext1 = sqlTask1.getQueryContext().addTaskContext(new TaskStateMachine(new TaskId("q1", 1, 0, 1), executor), session, false, false, OptionalInt.empty(), false);
         PipelineContext pipelineContext11 = taskContext1.addPipelineContext(0, false, false, false);
         DriverContext driverContext111 = pipelineContext11.addDriverContext();
         OperatorContext operatorContext1 = driverContext111.addOperatorContext(1, new PlanNodeId("na"), "na");
@@ -126,7 +127,7 @@ public class TestMemoryRevokingScheduler
         DriverContext driverContext112 = pipelineContext11.addDriverContext();
         OperatorContext operatorContext3 = driverContext112.addOperatorContext(3, new PlanNodeId("na"), "na");
 
-        TaskContext taskContext2 = sqlTask2.getQueryContext().addTaskContext(new TaskStateMachine(new TaskId("q2", 1, 1), executor), session, false, false, OptionalInt.empty(), false);
+        TaskContext taskContext2 = sqlTask2.getQueryContext().addTaskContext(new TaskStateMachine(new TaskId("q2", 1, 0, 1), executor), session, false, false, OptionalInt.empty(), false);
         PipelineContext pipelineContext21 = taskContext2.addPipelineContext(1, false, false, false);
         DriverContext driverContext211 = pipelineContext21.addDriverContext();
         OperatorContext operatorContext4 = driverContext211.addOperatorContext(4, new PlanNodeId("na"), "na");
@@ -248,7 +249,7 @@ public class TestMemoryRevokingScheduler
 
     private OperatorContext createContexts(SqlTask sqlTask)
     {
-        TaskContext taskContext = sqlTask.getQueryContext().addTaskContext(new TaskStateMachine(new TaskId("q", 1, 1), executor), session, false, false, OptionalInt.empty(), false);
+        TaskContext taskContext = sqlTask.getQueryContext().addTaskContext(new TaskStateMachine(new TaskId("q", 1, 0, 1), executor), session, false, false, OptionalInt.empty(), false);
         PipelineContext pipelineContext = taskContext.addPipelineContext(0, false, false, false);
         DriverContext driverContext = pipelineContext.addDriverContext();
         OperatorContext operatorContext = driverContext.addOperatorContext(1, new PlanNodeId("na"), "na");
@@ -286,7 +287,7 @@ public class TestMemoryRevokingScheduler
 
     private SqlTask newSqlTask()
     {
-        TaskId taskId = new TaskId("query", 0, idGeneator.incrementAndGet());
+        TaskId taskId = new TaskId("query", 0, 0, idGeneator.incrementAndGet());
         URI location = URI.create("fake://task/" + taskId);
 
         return createSqlTask(
@@ -303,6 +304,7 @@ public class TestMemoryRevokingScheduler
                         new DataSize(1, GIGABYTE),
                         spillSpaceTracker),
                 sqlTaskExecutionFactory,
+                new MockExchangeClientSupplier(),
                 executor,
                 Functions.identity(),
                 new DataSize(32, MEGABYTE),

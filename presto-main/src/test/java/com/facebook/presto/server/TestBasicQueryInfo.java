@@ -20,6 +20,7 @@ import com.facebook.presto.spi.QueryId;
 import com.facebook.presto.spi.StandardErrorCode;
 import com.facebook.presto.spi.eventlistener.StageGcStatistics;
 import com.facebook.presto.spi.memory.MemoryPoolId;
+import com.facebook.presto.spi.resourceGroups.QueryType;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
@@ -63,9 +64,9 @@ public class TestBasicQueryInfo
                                 Duration.valueOf("9m"),
                                 Duration.valueOf("10m"),
                                 Duration.valueOf("11m"),
-                                Duration.valueOf("12m"),
                                 13,
                                 14,
+                                21,
                                 15,
                                 16,
                                 17,
@@ -91,9 +92,13 @@ public class TestBasicQueryInfo
                                 30,
                                 DataSize.valueOf("31GB"),
                                 32,
-                                DataSize.valueOf("32GB"),
+                                33,
+                                DataSize.valueOf("34GB"),
+                                DataSize.valueOf("35GB"),
+                                DataSize.valueOf("36GB"),
                                 ImmutableList.of(new StageGcStatistics(
                                         101,
+                                        1002,
                                         102,
                                         103,
                                         104,
@@ -101,7 +106,6 @@ public class TestBasicQueryInfo
                                         106,
                                         107)),
                                 ImmutableList.of()),
-                        Optional.empty(),
                         Optional.empty(),
                         Optional.empty(),
                         ImmutableMap.of(),
@@ -119,6 +123,8 @@ public class TestBasicQueryInfo
                         ImmutableSet.of(),
                         Optional.empty(),
                         false,
+                        Optional.empty(),
+                        Optional.of(QueryType.INSERT),
                         Optional.empty()));
 
         assertEquals(basicInfo.getQueryId().getId(), "0");
@@ -126,6 +132,7 @@ public class TestBasicQueryInfo
         assertEquals(basicInfo.getMemoryPool().getId(), "reserved");
         assertEquals(basicInfo.isScheduled(), false);
         assertEquals(basicInfo.getQuery(), "SELECT 4");
+        assertEquals(basicInfo.getQueryType(), Optional.of(QueryType.INSERT));
 
         assertEquals(basicInfo.getQueryStats().getCreateTime(), DateTime.parse("1991-09-06T05:00-05:30"));
         assertEquals(basicInfo.getQueryStats().getEndTime(), DateTime.parse("1991-09-06T06:00-05:30"));

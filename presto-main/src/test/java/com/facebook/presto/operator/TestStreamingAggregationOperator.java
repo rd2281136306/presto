@@ -19,11 +19,10 @@ import com.facebook.presto.metadata.MetadataManager;
 import com.facebook.presto.operator.StreamingAggregationOperator.StreamingAggregationOperatorFactory;
 import com.facebook.presto.operator.aggregation.InternalAggregationFunction;
 import com.facebook.presto.spi.Page;
+import com.facebook.presto.spi.plan.AggregationNode;
+import com.facebook.presto.spi.plan.PlanNodeId;
 import com.facebook.presto.sql.analyzer.FeaturesConfig;
 import com.facebook.presto.sql.gen.JoinCompiler;
-import com.facebook.presto.sql.planner.plan.AggregationNode;
-import com.facebook.presto.sql.planner.plan.PlanNodeId;
-import com.facebook.presto.sql.tree.QualifiedName;
 import com.facebook.presto.testing.MaterializedResult;
 import com.google.common.collect.ImmutableList;
 import org.testng.annotations.AfterMethod;
@@ -54,9 +53,9 @@ public class TestStreamingAggregationOperator
     private static final FunctionManager functionManager = MetadataManager.createTestMetadataManager().getFunctionManager();
 
     private static final InternalAggregationFunction LONG_SUM = functionManager.getAggregateFunctionImplementation(
-            functionManager.resolveFunction(TEST_SESSION, QualifiedName.of("sum"), fromTypes(BIGINT)));
+            functionManager.lookupFunction("sum", fromTypes(BIGINT)));
     private static final InternalAggregationFunction COUNT = functionManager.getAggregateFunctionImplementation(
-            functionManager.resolveFunction(TEST_SESSION, QualifiedName.of("count"), ImmutableList.of()));
+            functionManager.lookupFunction("count", ImmutableList.of()));
 
     private ExecutorService executor;
     private ScheduledExecutorService scheduledExecutor;

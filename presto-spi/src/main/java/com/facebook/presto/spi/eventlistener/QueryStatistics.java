@@ -25,8 +25,8 @@ public class QueryStatistics
     private final Duration wallTime;
     private final Duration queuedTime;
     private final Optional<Duration> analysisTime;
-    private final Optional<Duration> distributedPlanningTime;
 
+    private final int peakRunningTasks;
     private final long peakUserMemoryBytes;
     // peak of user + system memory
     private final long peakTotalNonRevocableMemoryBytes;
@@ -36,8 +36,9 @@ public class QueryStatistics
     private final long totalRows;
     private final long outputBytes;
     private final long outputRows;
-    private final long writtenBytes;
-    private final long writtenRows;
+    private final long writtenOutputBytes;
+    private final long writtenOutputRows;
+    private final long writtenIntermediateBytes;
 
     private final double cumulativeMemory;
 
@@ -55,7 +56,7 @@ public class QueryStatistics
             Duration wallTime,
             Duration queuedTime,
             Optional<Duration> analysisTime,
-            Optional<Duration> distributedPlanningTime,
+            int peakRunningTasks,
             long peakUserMemoryBytes,
             long peakTotalNonRevocableMemoryBytes,
             long peakTaskUserMemory,
@@ -64,8 +65,9 @@ public class QueryStatistics
             long totalRows,
             long outputBytes,
             long outputRows,
-            long writtenBytes,
-            long writtenRows,
+            long writtenOutputBytes,
+            long writtenOutputRows,
+            long writtenIntermediateBytes,
             double cumulativeMemory,
             List<StageGcStatistics> stageGcStatistics,
             int completedSplits,
@@ -77,7 +79,7 @@ public class QueryStatistics
         this.wallTime = requireNonNull(wallTime, "wallTime is null");
         this.queuedTime = requireNonNull(queuedTime, "queuedTime is null");
         this.analysisTime = requireNonNull(analysisTime, "analysisTime is null");
-        this.distributedPlanningTime = requireNonNull(distributedPlanningTime, "distributedPlanningTime is null");
+        this.peakRunningTasks = peakRunningTasks;
         this.peakUserMemoryBytes = peakUserMemoryBytes;
         this.peakTotalNonRevocableMemoryBytes = peakTotalNonRevocableMemoryBytes;
         this.peakTaskUserMemory = peakTaskUserMemory;
@@ -86,8 +88,9 @@ public class QueryStatistics
         this.totalRows = totalRows;
         this.outputBytes = outputBytes;
         this.outputRows = outputRows;
-        this.writtenBytes = writtenBytes;
-        this.writtenRows = writtenRows;
+        this.writtenOutputBytes = writtenOutputBytes;
+        this.writtenOutputRows = writtenOutputRows;
+        this.writtenIntermediateBytes = writtenIntermediateBytes;
         this.cumulativeMemory = cumulativeMemory;
         this.stageGcStatistics = requireNonNull(stageGcStatistics, "stageGcStatistics is null");
         this.completedSplits = completedSplits;
@@ -116,9 +119,9 @@ public class QueryStatistics
         return analysisTime;
     }
 
-    public Optional<Duration> getDistributedPlanningTime()
+    public int getPeakRunningTasks()
     {
-        return distributedPlanningTime;
+        return peakRunningTasks;
     }
 
     public long getPeakUserMemoryBytes()
@@ -161,14 +164,19 @@ public class QueryStatistics
         return outputRows;
     }
 
-    public long getWrittenBytes()
+    public long getWrittenOutputBytes()
     {
-        return writtenBytes;
+        return writtenOutputBytes;
     }
 
-    public long getWrittenRows()
+    public long getWrittenOutputRows()
     {
-        return writtenRows;
+        return writtenOutputRows;
+    }
+
+    public long getWrittenIntermediateBytes()
+    {
+        return writtenIntermediateBytes;
     }
 
     public double getCumulativeMemory()

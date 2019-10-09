@@ -15,24 +15,25 @@ package com.facebook.presto.tests;
 
 import com.facebook.presto.Session;
 import com.facebook.presto.Session.SessionBuilder;
-import com.facebook.presto.connector.ConnectorId;
 import com.facebook.presto.cost.StatsCalculator;
 import com.facebook.presto.execution.QueryInfo;
 import com.facebook.presto.execution.QueryManager;
 import com.facebook.presto.execution.warnings.WarningCollector;
 import com.facebook.presto.metadata.AllNodes;
 import com.facebook.presto.metadata.Catalog;
+import com.facebook.presto.metadata.InternalNode;
 import com.facebook.presto.metadata.Metadata;
 import com.facebook.presto.metadata.QualifiedObjectName;
 import com.facebook.presto.metadata.SessionPropertyManager;
 import com.facebook.presto.server.BasicQueryInfo;
 import com.facebook.presto.server.testing.TestingPrestoServer;
-import com.facebook.presto.spi.Node;
+import com.facebook.presto.spi.ConnectorId;
 import com.facebook.presto.spi.Plugin;
 import com.facebook.presto.spi.QueryId;
 import com.facebook.presto.split.PageSourceManager;
 import com.facebook.presto.split.SplitManager;
 import com.facebook.presto.sql.parser.SqlParserOptions;
+import com.facebook.presto.sql.planner.ConnectorPlanOptimizerManager;
 import com.facebook.presto.sql.planner.NodePartitioningManager;
 import com.facebook.presto.sql.planner.Plan;
 import com.facebook.presto.testing.MaterializedResult;
@@ -266,6 +267,12 @@ public class DistributedQueryRunner
     }
 
     @Override
+    public ConnectorPlanOptimizerManager getPlanOptimizerManager()
+    {
+        return coordinator.getPlanOptimizerManager();
+    }
+
+    @Override
     public StatsCalculator getStatsCalculator()
     {
         return coordinator.getStatsCalculator();
@@ -332,7 +339,7 @@ public class DistributedQueryRunner
     {
         for (TestingPrestoServer server : servers) {
             server.refreshNodes();
-            Set<Node> activeNodesWithConnector = server.getActiveNodesWithConnector(connectorId);
+            Set<InternalNode> activeNodesWithConnector = server.getActiveNodesWithConnector(connectorId);
             if (activeNodesWithConnector.size() != servers.size()) {
                 return false;
             }
@@ -413,6 +420,11 @@ public class DistributedQueryRunner
         Plan queryPlan = getQueryPlan(queryId);
         coordinator.getQueryManager().cancelQuery(queryId);
         return queryPlan;
+    }
+
+    public List<BasicQueryInfo> getQueries()
+    {
+        return coordinator.getQueryManager().getQueries();
     }
 
     public QueryInfo getQueryInfo(QueryId queryId)

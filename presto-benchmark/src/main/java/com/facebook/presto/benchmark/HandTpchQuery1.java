@@ -13,7 +13,6 @@
  */
 package com.facebook.presto.benchmark;
 
-import com.facebook.presto.Session;
 import com.facebook.presto.benchmark.HandTpchQuery1.TpchQuery1Operator.TpchQuery1OperatorFactory;
 import com.facebook.presto.metadata.FunctionManager;
 import com.facebook.presto.operator.DriverContext;
@@ -25,10 +24,9 @@ import com.facebook.presto.operator.aggregation.InternalAggregationFunction;
 import com.facebook.presto.spi.Page;
 import com.facebook.presto.spi.PageBuilder;
 import com.facebook.presto.spi.block.Block;
+import com.facebook.presto.spi.plan.AggregationNode.Step;
+import com.facebook.presto.spi.plan.PlanNodeId;
 import com.facebook.presto.spi.type.Type;
-import com.facebook.presto.sql.planner.plan.AggregationNode.Step;
-import com.facebook.presto.sql.planner.plan.PlanNodeId;
-import com.facebook.presto.sql.tree.QualifiedName;
 import com.facebook.presto.testing.LocalQueryRunner;
 import com.facebook.presto.util.DateTimeUtils;
 import com.google.common.collect.ImmutableList;
@@ -44,7 +42,6 @@ import static com.facebook.presto.spi.type.DateType.DATE;
 import static com.facebook.presto.spi.type.DoubleType.DOUBLE;
 import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
 import static com.facebook.presto.sql.analyzer.TypeSignatureProvider.fromTypes;
-import static com.facebook.presto.testing.TestingSession.testSessionBuilder;
 import static com.google.common.base.Preconditions.checkState;
 import static io.airlift.units.DataSize.Unit.MEGABYTE;
 import static java.util.Objects.requireNonNull;
@@ -62,15 +59,14 @@ public class HandTpchQuery1
         super(localQueryRunner, "hand_tpch_query_1", 1, 5);
 
         FunctionManager functionManager = localQueryRunner.getMetadata().getFunctionManager();
-        Session session = testSessionBuilder().setCatalog("tpch").setSchema("tiny").build();
         longAverage = functionManager.getAggregateFunctionImplementation(
-                functionManager.resolveFunction(session, QualifiedName.of("avg"), fromTypes(BIGINT)));
+                functionManager.lookupFunction("avg", fromTypes(BIGINT)));
         doubleAverage = functionManager.getAggregateFunctionImplementation(
-                functionManager.resolveFunction(session, QualifiedName.of("avg"), fromTypes(DOUBLE)));
+                functionManager.lookupFunction("avg", fromTypes(DOUBLE)));
         doubleSum = functionManager.getAggregateFunctionImplementation(
-                functionManager.resolveFunction(session, QualifiedName.of("sum"), fromTypes(DOUBLE)));
+                functionManager.lookupFunction("sum", fromTypes(DOUBLE)));
         countFunction = functionManager.getAggregateFunctionImplementation(
-                functionManager.resolveFunction(session, QualifiedName.of("count"), ImmutableList.of()));
+                functionManager.lookupFunction("count", ImmutableList.of()));
     }
 
     @Override

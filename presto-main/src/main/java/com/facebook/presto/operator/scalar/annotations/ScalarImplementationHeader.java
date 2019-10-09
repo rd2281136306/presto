@@ -17,6 +17,7 @@ import com.facebook.presto.operator.scalar.ScalarHeader;
 import com.facebook.presto.spi.function.OperatorType;
 import com.facebook.presto.spi.function.ScalarFunction;
 import com.facebook.presto.spi.function.ScalarOperator;
+import com.facebook.presto.spi.relation.FullyQualifiedName;
 import com.google.common.collect.ImmutableList;
 
 import java.lang.reflect.AnnotatedElement;
@@ -24,7 +25,7 @@ import java.lang.reflect.Method;
 import java.util.List;
 import java.util.Optional;
 
-import static com.facebook.presto.metadata.OperatorSignatureUtils.mangleOperatorName;
+import static com.facebook.presto.metadata.BuiltInFunctionNamespaceManager.DEFAULT_NAMESPACE;
 import static com.facebook.presto.operator.annotations.FunctionsParserHelper.parseDescription;
 import static com.google.common.base.CaseFormat.LOWER_CAMEL;
 import static com.google.common.base.CaseFormat.LOWER_UNDERSCORE;
@@ -33,20 +34,20 @@ import static java.util.Objects.requireNonNull;
 
 public class ScalarImplementationHeader
 {
-    private final String name;
+    private final FullyQualifiedName name;
     private final Optional<OperatorType> operatorType;
     private final ScalarHeader header;
 
     private ScalarImplementationHeader(String name, ScalarHeader header)
     {
-        this.name = requireNonNull(name);
+        this.name = FullyQualifiedName.of(DEFAULT_NAMESPACE, requireNonNull(name));
         this.operatorType = Optional.empty();
         this.header = requireNonNull(header);
     }
 
     private ScalarImplementationHeader(OperatorType operatorType, ScalarHeader header)
     {
-        this.name = mangleOperatorName(operatorType);
+        this.name = operatorType.getFunctionName();
         this.operatorType = Optional.of(operatorType);
         this.header = requireNonNull(header);
     }
@@ -60,8 +61,7 @@ public class ScalarImplementationHeader
             return ((Method) annotatedElement).getName();
         }
 
-        checkArgument(false, "Only Classes and Methods are supported as annotated elements.");
-        return null;
+        throw new UnsupportedOperationException("Only Classes and Methods are supported as annotated elements.");
     }
 
     private static String camelToSnake(String name)
@@ -79,15 +79,15 @@ public class ScalarImplementationHeader
 
         if (scalarFunction != null) {
             String baseName = scalarFunction.value().isEmpty() ? camelToSnake(annotatedName(annotated)) : scalarFunction.value();
-            builder.add(new ScalarImplementationHeader(baseName, new ScalarHeader(description, scalarFunction.hidden(), scalarFunction.deterministic())));
+            builder.add(new ScalarImplementationHeader(baseName, new ScalarHeader(description, scalarFunction.hidden(), scalarFunction.deterministic(), scalarFunction.calledOnNullInput())));
 
             for (String alias : scalarFunction.alias()) {
-                builder.add(new ScalarImplementationHeader(alias, new ScalarHeader(description, scalarFunction.hidden(), scalarFunction.deterministic())));
+                builder.add(new ScalarImplementationHeader(alias, new ScalarHeader(description, scalarFunction.hidden(), scalarFunction.deterministic(), scalarFunction.calledOnNullInput())));
             }
         }
 
         if (scalarOperator != null) {
-            builder.add(new ScalarImplementationHeader(scalarOperator.value(), new ScalarHeader(description, true, true)));
+            builder.add(new ScalarImplementationHeader(scalarOperator.value(), new ScalarHeader(description, true, true, scalarOperator.value().isCalledOnNullInput())));
         }
 
         List<ScalarImplementationHeader> result = builder.build();
@@ -95,7 +95,7 @@ public class ScalarImplementationHeader
         return result;
     }
 
-    public String getName()
+    public FullyQualifiedName getName()
     {
         return name;
     }
@@ -113,11 +113,6 @@ public class ScalarImplementationHeader
     public boolean isHidden()
     {
         return header.isHidden();
-    }
-
-    public boolean isDeterministic()
-    {
-        return header.isDeterministic();
     }
 
     public ScalarHeader getHeader()

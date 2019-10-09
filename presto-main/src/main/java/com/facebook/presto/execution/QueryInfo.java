@@ -20,6 +20,7 @@ import com.facebook.presto.spi.ErrorType;
 import com.facebook.presto.spi.PrestoWarning;
 import com.facebook.presto.spi.QueryId;
 import com.facebook.presto.spi.memory.MemoryPoolId;
+import com.facebook.presto.spi.resourceGroups.QueryType;
 import com.facebook.presto.spi.resourceGroups.ResourceGroupId;
 import com.facebook.presto.spi.security.SelectedRole;
 import com.facebook.presto.transaction.TransactionId;
@@ -60,7 +61,6 @@ public class QueryInfo
     private final QueryStats queryStats;
     private final Optional<String> setCatalog;
     private final Optional<String> setSchema;
-    private final Optional<String> setPath;
     private final Map<String, String> setSessionProperties;
     private final Set<String> resetSessionProperties;
     private final Map<String, SelectedRole> setRoles;
@@ -78,6 +78,9 @@ public class QueryInfo
     private final Optional<Output> output;
     private final boolean completeInfo;
     private final Optional<ResourceGroupId> resourceGroupId;
+    private final Optional<QueryType> queryType;
+    // failedTasks is only available for final query info because the construction is expensive.
+    private final Optional<List<TaskId>> failedTasks;
 
     @JsonCreator
     public QueryInfo(
@@ -92,7 +95,6 @@ public class QueryInfo
             @JsonProperty("queryStats") QueryStats queryStats,
             @JsonProperty("setCatalog") Optional<String> setCatalog,
             @JsonProperty("setSchema") Optional<String> setSchema,
-            @JsonProperty("setPath") Optional<String> setPath,
             @JsonProperty("setSessionProperties") Map<String, String> setSessionProperties,
             @JsonProperty("resetSessionProperties") Set<String> resetSessionProperties,
             @JsonProperty("setRoles") Map<String, SelectedRole> setRoles,
@@ -108,7 +110,9 @@ public class QueryInfo
             @JsonProperty("inputs") Set<Input> inputs,
             @JsonProperty("output") Optional<Output> output,
             @JsonProperty("completeInfo") boolean completeInfo,
-            @JsonProperty("resourceGroupId") Optional<ResourceGroupId> resourceGroupId)
+            @JsonProperty("resourceGroupId") Optional<ResourceGroupId> resourceGroupId,
+            @JsonProperty("queryType") Optional<QueryType> queryType,
+            @JsonProperty("failedTasks") Optional<List<TaskId>> failedTasks)
     {
         requireNonNull(queryId, "queryId is null");
         requireNonNull(session, "session is null");
@@ -118,7 +122,6 @@ public class QueryInfo
         requireNonNull(queryStats, "queryStats is null");
         requireNonNull(setCatalog, "setCatalog is null");
         requireNonNull(setSchema, "setSchema is null");
-        requireNonNull(setPath, "setPath is null");
         requireNonNull(setSessionProperties, "setSessionProperties is null");
         requireNonNull(resetSessionProperties, "resetSessionProperties is null");
         requireNonNull(addedPreparedStatements, "addedPreparedStatemetns is null");
@@ -130,6 +133,8 @@ public class QueryInfo
         requireNonNull(output, "output is null");
         requireNonNull(resourceGroupId, "resourceGroupId is null");
         requireNonNull(warnings, "warnings is null");
+        requireNonNull(queryType, "queryType is null");
+        requireNonNull(failedTasks, "failedTasks is null");
 
         this.queryId = queryId;
         this.session = session;
@@ -142,7 +147,6 @@ public class QueryInfo
         this.queryStats = queryStats;
         this.setCatalog = setCatalog;
         this.setSchema = setSchema;
-        this.setPath = setPath;
         this.setSessionProperties = ImmutableMap.copyOf(setSessionProperties);
         this.resetSessionProperties = ImmutableSet.copyOf(resetSessionProperties);
         this.setRoles = ImmutableMap.copyOf(setRoles);
@@ -160,9 +164,17 @@ public class QueryInfo
         this.output = output;
         this.completeInfo = completeInfo;
         this.resourceGroupId = resourceGroupId;
+        this.queryType = queryType;
+        this.failedTasks = failedTasks;
     }
 
-    public static QueryInfo immediateFailureQueryInfo(Session session, String query, URI self, Optional<ResourceGroupId> resourceGroupId, Throwable throwable)
+    public static QueryInfo immediateFailureQueryInfo(
+            Session session,
+            String query,
+            URI self,
+            Optional<ResourceGroupId> resourceGroupId,
+            Optional<QueryType> queryType,
+            Throwable throwable)
     {
         ExecutionFailureInfo failureCause = toFailure(throwable);
         QueryInfo queryInfo = new QueryInfo(
@@ -175,7 +187,6 @@ public class QueryInfo
                 ImmutableList.of(),
                 query,
                 immediateFailureQueryStats(),
-                Optional.empty(),
                 Optional.empty(),
                 Optional.empty(),
                 ImmutableMap.of(),
@@ -193,7 +204,9 @@ public class QueryInfo
                 ImmutableSet.of(),
                 Optional.empty(),
                 true,
-                resourceGroupId);
+                resourceGroupId,
+                queryType,
+                Optional.empty());
 
         return queryInfo;
     }
@@ -262,12 +275,6 @@ public class QueryInfo
     public Optional<String> getSetSchema()
     {
         return setSchema;
-    }
-
-    @JsonProperty
-    public Optional<String> getSetPath()
-    {
-        return setPath;
     }
 
     @JsonProperty
@@ -374,6 +381,18 @@ public class QueryInfo
     public Optional<ResourceGroupId> getResourceGroupId()
     {
         return resourceGroupId;
+    }
+
+    @JsonProperty
+    public Optional<QueryType> getQueryType()
+    {
+        return queryType;
+    }
+
+    @JsonProperty
+    public Optional<List<TaskId>> getFailedTasks()
+    {
+        return failedTasks;
     }
 
     @Override

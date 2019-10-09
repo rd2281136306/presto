@@ -16,11 +16,13 @@ package com.facebook.presto.sql.planner.plan;
 import com.facebook.presto.metadata.InsertTableHandle;
 import com.facebook.presto.metadata.NewTableLayout;
 import com.facebook.presto.metadata.OutputTableHandle;
-import com.facebook.presto.metadata.TableHandle;
 import com.facebook.presto.spi.ConnectorTableMetadata;
 import com.facebook.presto.spi.SchemaTableName;
+import com.facebook.presto.spi.TableHandle;
+import com.facebook.presto.spi.plan.PlanNode;
+import com.facebook.presto.spi.plan.PlanNodeId;
+import com.facebook.presto.spi.relation.VariableReferenceExpression;
 import com.facebook.presto.sql.planner.PartitioningScheme;
-import com.facebook.presto.sql.planner.Symbol;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.annotation.JsonSubTypes;
@@ -38,31 +40,31 @@ import static java.util.Objects.requireNonNull;
 
 @Immutable
 public class TableWriterNode
-        extends PlanNode
+        extends InternalPlanNode
 {
     private final PlanNode source;
     private final WriterTarget target;
-    private final Symbol rowCountSymbol;
-    private final Symbol fragmentSymbol;
-    private final List<Symbol> columns;
+    private final VariableReferenceExpression rowCountVariable;
+    private final VariableReferenceExpression fragmentVariable;
+    private final VariableReferenceExpression tableCommitContextVariable;
+    private final List<VariableReferenceExpression> columns;
     private final List<String> columnNames;
     private final Optional<PartitioningScheme> partitioningScheme;
     private final Optional<StatisticAggregations> statisticsAggregation;
-    private final Optional<StatisticAggregationsDescriptor<Symbol>> statisticsAggregationDescriptor;
-    private final List<Symbol> outputs;
+    private final List<VariableReferenceExpression> outputs;
 
     @JsonCreator
     public TableWriterNode(
             @JsonProperty("id") PlanNodeId id,
             @JsonProperty("source") PlanNode source,
             @JsonProperty("target") WriterTarget target,
-            @JsonProperty("rowCountSymbol") Symbol rowCountSymbol,
-            @JsonProperty("fragmentSymbol") Symbol fragmentSymbol,
-            @JsonProperty("columns") List<Symbol> columns,
+            @JsonProperty("rowCountVariable") VariableReferenceExpression rowCountVariable,
+            @JsonProperty("fragmentVariable") VariableReferenceExpression fragmentVariable,
+            @JsonProperty("tableCommitContextVariable") VariableReferenceExpression tableCommitContextVariable,
+            @JsonProperty("columns") List<VariableReferenceExpression> columns,
             @JsonProperty("columnNames") List<String> columnNames,
             @JsonProperty("partitioningScheme") Optional<PartitioningScheme> partitioningScheme,
-            @JsonProperty("statisticsAggregation") Optional<StatisticAggregations> statisticsAggregation,
-            @JsonProperty("statisticsAggregationDescriptor") Optional<StatisticAggregationsDescriptor<Symbol>> statisticsAggregationDescriptor)
+            @JsonProperty("statisticsAggregation") Optional<StatisticAggregations> statisticsAggregation)
     {
         super(id);
 
@@ -72,20 +74,20 @@ public class TableWriterNode
 
         this.source = requireNonNull(source, "source is null");
         this.target = requireNonNull(target, "target is null");
-        this.rowCountSymbol = requireNonNull(rowCountSymbol, "rowCountSymbol is null");
-        this.fragmentSymbol = requireNonNull(fragmentSymbol, "fragmentSymbol is null");
+        this.rowCountVariable = requireNonNull(rowCountVariable, "rowCountVariable is null");
+        this.fragmentVariable = requireNonNull(fragmentVariable, "fragmentVariable is null");
+        this.tableCommitContextVariable = requireNonNull(tableCommitContextVariable, "tableCommitContextVariable is null");
         this.columns = ImmutableList.copyOf(columns);
         this.columnNames = ImmutableList.copyOf(columnNames);
         this.partitioningScheme = requireNonNull(partitioningScheme, "partitioningScheme is null");
         this.statisticsAggregation = requireNonNull(statisticsAggregation, "statisticsAggregation is null");
-        this.statisticsAggregationDescriptor = requireNonNull(statisticsAggregationDescriptor, "statisticsAggregationDescriptor is null");
-        checkArgument(statisticsAggregation.isPresent() == statisticsAggregationDescriptor.isPresent(), "statisticsAggregation and statisticsAggregationDescriptor must be either present or absent");
 
-        ImmutableList.Builder<Symbol> outputs = ImmutableList.<Symbol>builder()
-                .add(rowCountSymbol)
-                .add(fragmentSymbol);
+        ImmutableList.Builder<VariableReferenceExpression> outputs = ImmutableList.<VariableReferenceExpression>builder()
+                .add(rowCountVariable)
+                .add(fragmentVariable)
+                .add(tableCommitContextVariable);
         statisticsAggregation.ifPresent(aggregation -> {
-            outputs.addAll(aggregation.getGroupingSymbols());
+            outputs.addAll(aggregation.getGroupingVariables());
             outputs.addAll(aggregation.getAggregations().keySet());
         });
         this.outputs = outputs.build();
@@ -104,19 +106,25 @@ public class TableWriterNode
     }
 
     @JsonProperty
-    public Symbol getRowCountSymbol()
+    public VariableReferenceExpression getRowCountVariable()
     {
-        return rowCountSymbol;
+        return rowCountVariable;
     }
 
     @JsonProperty
-    public Symbol getFragmentSymbol()
+    public VariableReferenceExpression getFragmentVariable()
     {
-        return fragmentSymbol;
+        return fragmentVariable;
     }
 
     @JsonProperty
-    public List<Symbol> getColumns()
+    public VariableReferenceExpression getTableCommitContextVariable()
+    {
+        return tableCommitContextVariable;
+    }
+
+    @JsonProperty
+    public List<VariableReferenceExpression> getColumns()
     {
         return columns;
     }
@@ -139,12 +147,6 @@ public class TableWriterNode
         return statisticsAggregation;
     }
 
-    @JsonProperty
-    public Optional<StatisticAggregationsDescriptor<Symbol>> getStatisticsAggregationDescriptor()
-    {
-        return statisticsAggregationDescriptor;
-    }
-
     @Override
     public List<PlanNode> getSources()
     {
@@ -152,13 +154,13 @@ public class TableWriterNode
     }
 
     @Override
-    public List<Symbol> getOutputSymbols()
+    public List<VariableReferenceExpression> getOutputVariables()
     {
         return outputs;
     }
 
     @Override
-    public <R, C> R accept(PlanVisitor<R, C> visitor, C context)
+    public <R, C> R accept(InternalPlanVisitor<R, C> visitor, C context)
     {
         return visitor.visitTableWriter(this, context);
     }
@@ -166,7 +168,7 @@ public class TableWriterNode
     @Override
     public PlanNode replaceChildren(List<PlanNode> newChildren)
     {
-        return new TableWriterNode(getId(), Iterables.getOnlyElement(newChildren), target, rowCountSymbol, fragmentSymbol, columns, columnNames, partitioningScheme, statisticsAggregation, statisticsAggregationDescriptor);
+        return new TableWriterNode(getId(), Iterables.getOnlyElement(newChildren), target, rowCountVariable, fragmentVariable, tableCommitContextVariable, columns, columnNames, partitioningScheme, statisticsAggregation);
     }
 
     @JsonTypeInfo(use = JsonTypeInfo.Id.NAME, property = "@type")

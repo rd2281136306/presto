@@ -13,8 +13,8 @@
  */
 package com.facebook.presto;
 
-import com.facebook.presto.connector.ConnectorId;
 import com.facebook.presto.metadata.SessionPropertyManager;
+import com.facebook.presto.spi.ConnectorId;
 import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.security.ConnectorIdentity;
@@ -114,6 +114,12 @@ public class FullConnectorSession
     public Optional<String> getTraceToken()
     {
         return session.getTraceToken();
+    }
+
+    @Override
+    public Optional<String> getClientInfo()
+    {
+        return session.getClientInfo();
     }
 
     @Override

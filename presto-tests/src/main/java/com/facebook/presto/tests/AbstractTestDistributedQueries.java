@@ -762,12 +762,13 @@ public abstract class AbstractTestDistributedQueries
         assertContains(actual, expected);
 
         // test INFORMATION_SCHEMA.VIEWS
+        String user = getSession().getUser();
         actual = computeActual(format(
-                "SELECT table_name, view_definition FROM information_schema.views WHERE table_schema = '%s'",
+                "SELECT table_name, view_owner, view_definition FROM information_schema.views WHERE table_schema = '%s'",
                 getSession().getSchema().get()));
 
         expected = resultBuilder(getSession(), actual.getTypes())
-                .row("meta_test_view", formatSqlText(query))
+                .row("meta_test_view", user, formatSqlText(query))
                 .build();
 
         assertContains(actual, expected);
@@ -1018,16 +1019,16 @@ public abstract class AbstractTestDistributedQueries
         QueryInfo queryInfo = distributedQueryRunner.getQueryInfo(resultResultWithQueryId.getQueryId());
 
         assertEquals(queryInfo.getQueryStats().getOutputPositions(), 1L);
-        assertEquals(queryInfo.getQueryStats().getWrittenPositions(), 25L);
-        assertTrue(queryInfo.getQueryStats().getLogicalWrittenDataSize().toBytes() > 0L);
+        assertEquals(queryInfo.getQueryStats().getWrittenOutputPositions(), 25L);
+        assertTrue(queryInfo.getQueryStats().getWrittenOutputLogicalDataSize().toBytes() > 0L);
 
         sql = "INSERT INTO test_written_stats SELECT * FROM nation LIMIT 10";
         resultResultWithQueryId = distributedQueryRunner.executeWithQueryId(getSession(), sql);
         queryInfo = distributedQueryRunner.getQueryInfo(resultResultWithQueryId.getQueryId());
 
         assertEquals(queryInfo.getQueryStats().getOutputPositions(), 1L);
-        assertEquals(queryInfo.getQueryStats().getWrittenPositions(), 10L);
-        assertTrue(queryInfo.getQueryStats().getLogicalWrittenDataSize().toBytes() > 0L);
+        assertEquals(queryInfo.getQueryStats().getWrittenOutputPositions(), 10L);
+        assertTrue(queryInfo.getQueryStats().getWrittenOutputLogicalDataSize().toBytes() > 0L);
 
         assertUpdate("DROP TABLE test_written_stats");
     }

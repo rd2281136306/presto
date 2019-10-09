@@ -25,14 +25,13 @@ import com.facebook.presto.operator.aggregation.builder.InMemoryHashAggregationB
 import com.facebook.presto.spi.Page;
 import com.facebook.presto.spi.block.BlockBuilder;
 import com.facebook.presto.spi.block.PageBuilderStatus;
+import com.facebook.presto.spi.plan.AggregationNode.Step;
+import com.facebook.presto.spi.plan.PlanNodeId;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.spiller.Spiller;
 import com.facebook.presto.spiller.SpillerFactory;
 import com.facebook.presto.sql.analyzer.FeaturesConfig;
 import com.facebook.presto.sql.gen.JoinCompiler;
-import com.facebook.presto.sql.planner.plan.AggregationNode.Step;
-import com.facebook.presto.sql.planner.plan.PlanNodeId;
-import com.facebook.presto.sql.tree.QualifiedName;
 import com.facebook.presto.testing.MaterializedResult;
 import com.facebook.presto.testing.TestingTaskContext;
 import com.google.common.collect.ImmutableList;
@@ -100,7 +99,7 @@ public class TestHashAggregationOperator
     private static final InternalAggregationFunction LONG_AVERAGE = getAggregation("avg", BIGINT);
     private static final InternalAggregationFunction LONG_SUM = getAggregation("sum", BIGINT);
     private static final InternalAggregationFunction COUNT = functionManager.getAggregateFunctionImplementation(
-            functionManager.resolveFunction(TEST_SESSION, QualifiedName.of("count"), ImmutableList.of()));
+            functionManager.lookupFunction("count", ImmutableList.of()));
 
     private static final int MAX_BLOCK_SIZE_IN_BYTES = 64 * 1024;
 
@@ -403,7 +402,7 @@ public class TestHashAggregationOperator
             // value + hash + aggregation result
             assertEquals(page.getChannelCount(), 3);
             for (int i = 0; i < page.getPositionCount(); i++) {
-                assertEquals(page.getBlock(2).getLong(i, 0), 1);
+                assertEquals(page.getBlock(2).getLong(i), 1);
                 count++;
             }
         }
@@ -739,7 +738,7 @@ public class TestHashAggregationOperator
 
     private static InternalAggregationFunction getAggregation(String name, Type... arguments)
     {
-        return functionManager.getAggregateFunctionImplementation(functionManager.resolveFunction(TEST_SESSION, QualifiedName.of(name), fromTypes(arguments)));
+        return functionManager.getAggregateFunctionImplementation(functionManager.lookupFunction(name, fromTypes(arguments)));
     }
 
     private static class DummySpillerFactory

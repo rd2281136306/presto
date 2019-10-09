@@ -13,19 +13,11 @@
  */
 package com.facebook.presto.parquet;
 
-import com.facebook.presto.spi.PrestoException;
-import com.facebook.presto.spi.predicate.Domain;
-import com.facebook.presto.spi.predicate.TupleDomain;
-import com.facebook.presto.spi.type.BigintType;
-import com.facebook.presto.spi.type.BooleanType;
-import com.facebook.presto.spi.type.DateType;
+import com.facebook.presto.spi.Subfield;
+import com.facebook.presto.spi.Subfield.PathElement;
 import com.facebook.presto.spi.type.DecimalType;
-import com.facebook.presto.spi.type.DoubleType;
-import com.facebook.presto.spi.type.RealType;
-import com.facebook.presto.spi.type.TimestampType;
 import com.facebook.presto.spi.type.Type;
-import com.facebook.presto.spi.type.VarcharType;
-import org.apache.parquet.column.ColumnDescriptor;
+import com.google.common.collect.ImmutableList;
 import org.apache.parquet.column.Encoding;
 import org.apache.parquet.io.ColumnIO;
 import org.apache.parquet.io.ColumnIOFactory;
@@ -35,8 +27,8 @@ import org.apache.parquet.io.MessageColumnIO;
 import org.apache.parquet.io.ParquetDecodingException;
 import org.apache.parquet.io.PrimitiveColumnIO;
 import org.apache.parquet.schema.DecimalMetadata;
+import org.apache.parquet.schema.GroupType;
 import org.apache.parquet.schema.MessageType;
-import org.apache.parquet.schema.OriginalType;
 
 import java.util.Arrays;
 import java.util.HashMap;
@@ -45,8 +37,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 
-import static com.facebook.presto.spi.StandardErrorCode.NOT_SUPPORTED;
-import static com.facebook.presto.spi.type.IntegerType.INTEGER;
+import static com.facebook.presto.spi.Subfield.NestedField;
 import static com.google.common.base.Preconditions.checkArgument;
 import static org.apache.parquet.schema.OriginalType.DECIMAL;
 import static org.apache.parquet.schema.Type.Repetition.REPEATED;
@@ -159,46 +150,6 @@ public final class ParquetTypeUtils
         return index;
     }
 
-    public static Type getPrestoType(TupleDomain<ColumnDescriptor> effectivePredicate, RichColumnDescriptor descriptor)
-    {
-        switch (descriptor.getPrimitiveType().getPrimitiveTypeName()) {
-            case BOOLEAN:
-                return BooleanType.BOOLEAN;
-            case BINARY:
-                return createDecimalType(descriptor).orElse(createVarcharType(effectivePredicate, descriptor));
-            case FLOAT:
-                return RealType.REAL;
-            case DOUBLE:
-                return DoubleType.DOUBLE;
-            case INT32:
-                return getInt32Type(descriptor);
-            case INT64:
-                return createDecimalType(descriptor).orElse(BigintType.BIGINT);
-            case INT96:
-                return TimestampType.TIMESTAMP;
-            case FIXED_LEN_BYTE_ARRAY:
-                return createDecimalType(descriptor).orElseThrow(() -> new PrestoException(NOT_SUPPORTED, "Parquet type FIXED_LEN_BYTE_ARRAY supported as DECIMAL; got " + descriptor.getPrimitiveType().getOriginalType()));
-            default:
-                throw new PrestoException(NOT_SUPPORTED, "Unsupported parquet type: " + descriptor.getType());
-        }
-    }
-
-    private static Type createVarcharType(TupleDomain<ColumnDescriptor> effectivePredicate, RichColumnDescriptor column)
-    {
-        // We look at the effectivePredicate domain here, because it matches the Hive column type
-        // more accurately than the type available in the RichColumnDescriptor.
-        // For example, a Hive column of type varchar(length) is encoded as a Parquet BINARY, but
-        // when that is converted to a Presto Type the length information wasn't retained.
-        Optional<Map<ColumnDescriptor, Domain>> predicateDomains = effectivePredicate.getDomains();
-        if (predicateDomains.isPresent()) {
-            Domain domain = predicateDomains.get().get(column);
-            if (domain != null) {
-                return domain.getType();
-            }
-        }
-        return VarcharType.VARCHAR;
-    }
-
     public static int getFieldIndex(MessageType fileSchema, String name)
     {
         try {
@@ -238,7 +189,7 @@ public final class ParquetTypeUtils
         }
     }
 
-    public static org.apache.parquet.schema.Type getParquetTypeByName(String columnName, MessageType messageType)
+    public static org.apache.parquet.schema.Type getParquetTypeByName(String columnName, GroupType messageType)
     {
         if (messageType.containsField(columnName)) {
             return messageType.getType(columnName);
@@ -316,20 +267,37 @@ public final class ParquetTypeUtils
         return value;
     }
 
-    private static Type getInt32Type(RichColumnDescriptor descriptor)
+    public static MessageType getSubfieldType(GroupType baseType, Subfield subfield)
     {
-        OriginalType originalType = descriptor.getPrimitiveType().getOriginalType();
-        if (originalType == null) {
-            return INTEGER;
+        checkArgument(subfield.getPath().size() >= 1, "subfield size is less than 1");
+
+        ImmutableList.Builder<org.apache.parquet.schema.Type> typeBuilder = ImmutableList.builder();
+        org.apache.parquet.schema.Type parentType = getParquetTypeByName(subfield.getRootName(), baseType);
+
+        for (PathElement field : subfield.getPath()) {
+            if (field instanceof NestedField) {
+                NestedField nestedField = (NestedField) field;
+                org.apache.parquet.schema.Type childType = getParquetTypeByName(nestedField.getName(), parentType.asGroupType());
+                if (childType != null) {
+                    typeBuilder.add(childType);
+                    parentType = childType;
+                }
+            }
+            else {
+                typeBuilder.add(parentType.asGroupType().getFields().get(0));
+                break;
+            }
         }
 
-        switch (originalType) {
-            case DECIMAL:
-                return createDecimalType(descriptor.getPrimitiveType().getDecimalMetadata());
-            case DATE:
-                return DateType.DATE;
-            default:
-                return INTEGER;
+        List<org.apache.parquet.schema.Type> subfieldTypes = typeBuilder.build();
+        if (subfieldTypes.isEmpty()) {
+            return new MessageType(subfield.getRootName(), ImmutableList.of());
         }
+        org.apache.parquet.schema.Type type = subfieldTypes.get(subfieldTypes.size() - 1);
+        for (int i = subfieldTypes.size() - 2; i >= 0; --i) {
+            GroupType groupType = subfieldTypes.get(i).asGroupType();
+            type = new MessageType(groupType.getName(), ImmutableList.of(type));
+        }
+        return new MessageType(subfield.getRootName(), ImmutableList.of(type));
     }
 }

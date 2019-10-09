@@ -17,6 +17,8 @@ import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import org.apache.hadoop.fs.Path;
 
+import java.util.Optional;
+
 import static java.lang.String.format;
 import static java.util.Objects.requireNonNull;
 
@@ -24,13 +26,15 @@ public class LocationHandle
 {
     private final Path targetPath;
     private final Path writePath;
-    private final boolean isExistingTable;
+    private final Optional<Path> tempPath;
+    private final TableType tableType;
     private final WriteMode writeMode;
 
     public LocationHandle(
             Path targetPath,
             Path writePath,
-            boolean isExistingTable,
+            Optional<Path> tempPath,
+            TableType tableType,
             WriteMode writeMode)
     {
         if (writeMode.isWritePathSameAsTargetPath() && !targetPath.equals(writePath)) {
@@ -38,7 +42,8 @@ public class LocationHandle
         }
         this.targetPath = requireNonNull(targetPath, "targetPath is null");
         this.writePath = requireNonNull(writePath, "writePath is null");
-        this.isExistingTable = isExistingTable;
+        this.tempPath = requireNonNull(tempPath, "tempPath is null");
+        this.tableType = requireNonNull(tableType, "tableType is null");
         this.writeMode = requireNonNull(writeMode, "writeMode is null");
     }
 
@@ -46,13 +51,15 @@ public class LocationHandle
     public LocationHandle(
             @JsonProperty("targetPath") String targetPath,
             @JsonProperty("writePath") String writePath,
-            @JsonProperty("isExistingTable") boolean isExistingTable,
+            @JsonProperty("tempPath") Optional<String> tempPath,
+            @JsonProperty("tableType") TableType tableType,
             @JsonProperty("writeMode") WriteMode writeMode)
     {
         this(
                 new Path(requireNonNull(targetPath, "targetPath is null")),
                 new Path(requireNonNull(writePath, "writePath is null")),
-                isExistingTable,
+                requireNonNull(tempPath, "tempPath is null").map(Path::new),
+                tableType,
                 writeMode);
     }
 
@@ -69,15 +76,21 @@ public class LocationHandle
     }
 
     // This method should only be called by LocationService
+    Optional<Path> getTempPath()
+    {
+        return tempPath;
+    }
+
+    // This method should only be called by LocationService
     public WriteMode getWriteMode()
     {
         return writeMode;
     }
 
     // This method should only be called by LocationService
-    boolean isExistingTable()
+    TableType getTableType()
     {
-        return isExistingTable;
+        return tableType;
     }
 
     @JsonProperty("targetPath")
@@ -92,10 +105,16 @@ public class LocationHandle
         return writePath.toString();
     }
 
-    @JsonProperty("isExistingTable")
-    public boolean getJsonSerializableIsExistingTable()
+    @JsonProperty("tempPath")
+    public Optional<String> getJsonSerializableTempPath()
     {
-        return isExistingTable;
+        return tempPath.map(Path::toString);
+    }
+
+    @JsonProperty("tableType")
+    public TableType getJsonSerializableTableType()
+    {
+        return tableType;
     }
 
     @JsonProperty("writeMode")
@@ -142,5 +161,12 @@ public class LocationHandle
         {
             return writePathSameAsTargetPath;
         }
+    }
+
+    public enum TableType
+    {
+        NEW,
+        EXISTING,
+        TEMPORARY,
     }
 }

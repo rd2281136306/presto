@@ -14,14 +14,14 @@
 package com.facebook.presto.execution.scheduler;
 
 import com.facebook.presto.execution.SqlStageExecution;
-import com.facebook.presto.execution.StageState;
+import com.facebook.presto.execution.StageExecutionState;
+import com.facebook.presto.spi.plan.PlanNode;
 import com.facebook.presto.sql.planner.PlanFragment;
 import com.facebook.presto.sql.planner.plan.ExchangeNode;
 import com.facebook.presto.sql.planner.plan.IndexJoinNode;
+import com.facebook.presto.sql.planner.plan.InternalPlanVisitor;
 import com.facebook.presto.sql.planner.plan.JoinNode;
 import com.facebook.presto.sql.planner.plan.PlanFragmentId;
-import com.facebook.presto.sql.planner.plan.PlanNode;
-import com.facebook.presto.sql.planner.plan.PlanVisitor;
 import com.facebook.presto.sql.planner.plan.RemoteSourceNode;
 import com.facebook.presto.sql.planner.plan.SemiJoinNode;
 import com.facebook.presto.sql.planner.plan.SpatialJoinNode;
@@ -47,9 +47,8 @@ import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
-import static com.facebook.presto.execution.StageState.RUNNING;
-import static com.facebook.presto.execution.StageState.SCHEDULED;
-import static com.facebook.presto.sql.planner.plan.ExchangeNode.Scope.LOCAL;
+import static com.facebook.presto.execution.StageExecutionState.RUNNING;
+import static com.facebook.presto.execution.StageExecutionState.SCHEDULED;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.collect.ImmutableMap.toImmutableMap;
@@ -91,7 +90,7 @@ public class PhasedExecutionSchedule
     private void removeCompletedStages()
     {
         for (Iterator<SqlStageExecution> stageIterator = activeSources.iterator(); stageIterator.hasNext(); ) {
-            StageState state = stageIterator.next().getState();
+            StageExecutionState state = stageIterator.next().getState();
             if (state == SCHEDULED || state == RUNNING || state.isDone()) {
                 stageIterator.remove();
             }
@@ -116,7 +115,7 @@ public class PhasedExecutionSchedule
 
     private static boolean hasSourceDistributedStage(Set<SqlStageExecution> phase)
     {
-        return phase.stream().anyMatch(stage -> !stage.getFragment().getPartitionedSources().isEmpty());
+        return phase.stream().anyMatch(stage -> !stage.getFragment().getTableScanSchedulingOrder().isEmpty());
     }
 
     @Override
@@ -170,7 +169,7 @@ public class PhasedExecutionSchedule
     }
 
     private static class Visitor
-            extends PlanVisitor<Set<PlanFragmentId>, PlanFragmentId>
+            extends InternalPlanVisitor<Set<PlanFragmentId>, PlanFragmentId>
     {
         private final Map<PlanFragmentId, PlanFragment> fragments;
         private final DirectedGraph<PlanFragmentId, DefaultEdge> graph;
@@ -269,7 +268,7 @@ public class PhasedExecutionSchedule
         @Override
         public Set<PlanFragmentId> visitExchange(ExchangeNode node, PlanFragmentId currentFragmentId)
         {
-            checkArgument(node.getScope() == LOCAL, "Only local exchanges are supported in the phased execution scheduler");
+            checkArgument(node.getScope().isLocal(), "Only local exchanges are supported in the phased execution scheduler");
             ImmutableSet.Builder<PlanFragmentId> allSources = ImmutableSet.builder();
 
             // Link the source fragments together, so we only schedule one at a time.
@@ -306,7 +305,7 @@ public class PhasedExecutionSchedule
         }
 
         @Override
-        protected Set<PlanFragmentId> visitPlan(PlanNode node, PlanFragmentId currentFragmentId)
+        public Set<PlanFragmentId> visitPlan(PlanNode node, PlanFragmentId currentFragmentId)
         {
             List<PlanNode> sources = node.getSources();
             if (sources.isEmpty()) {

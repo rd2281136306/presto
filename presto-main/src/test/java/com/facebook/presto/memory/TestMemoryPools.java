@@ -26,8 +26,8 @@ import com.facebook.presto.operator.TaskContext;
 import com.facebook.presto.spi.Page;
 import com.facebook.presto.spi.QueryId;
 import com.facebook.presto.spi.memory.MemoryPoolId;
+import com.facebook.presto.spi.plan.PlanNodeId;
 import com.facebook.presto.spiller.SpillSpaceTracker;
-import com.facebook.presto.sql.planner.plan.PlanNodeId;
 import com.facebook.presto.testing.LocalQueryRunner;
 import com.facebook.presto.testing.PageConsumerOperator.PageConsumerOutputFactory;
 import com.facebook.presto.tpch.TpchConnectorFactory;
@@ -236,18 +236,21 @@ public class TestMemoryPools
 
         testPool.reserve(testQuery, "test_tag", 10);
 
-        Map<String, Long> allocations = testPool.getTaggedMemoryAllocations().get(testQuery);
+        Map<String, Long> allocations = testPool.getTaggedMemoryAllocations(testQuery);
         assertEquals(allocations, ImmutableMap.of("test_tag", 10L));
 
         // free 5 bytes for test_tag
         testPool.free(testQuery, "test_tag", 5);
+        allocations = testPool.getTaggedMemoryAllocations(testQuery);
         assertEquals(allocations, ImmutableMap.of("test_tag", 5L));
 
         testPool.reserve(testQuery, "test_tag2", 20);
+        allocations = testPool.getTaggedMemoryAllocations(testQuery);
         assertEquals(allocations, ImmutableMap.of("test_tag", 5L, "test_tag2", 20L));
 
         // free the remaining 5 bytes for test_tag
         testPool.free(testQuery, "test_tag", 5);
+        allocations = testPool.getTaggedMemoryAllocations(testQuery);
         assertEquals(allocations, ImmutableMap.of("test_tag2", 20L));
 
         // free all for test_tag2
@@ -263,12 +266,12 @@ public class TestMemoryPools
         MemoryPool pool2 = new MemoryPool(new MemoryPoolId("test"), new DataSize(1000, BYTE));
         pool1.reserve(testQuery, "test_tag", 10);
 
-        Map<String, Long> allocations = pool1.getTaggedMemoryAllocations().get(testQuery);
+        Map<String, Long> allocations = pool1.getTaggedMemoryAllocations(testQuery);
         assertEquals(allocations, ImmutableMap.of("test_tag", 10L));
 
         pool1.moveQuery(testQuery, pool2);
-        assertNull(pool1.getTaggedMemoryAllocations().get(testQuery));
-        allocations = pool2.getTaggedMemoryAllocations().get(testQuery);
+        assertNull(pool1.getTaggedMemoryAllocations(testQuery));
+        allocations = pool2.getTaggedMemoryAllocations(testQuery);
         assertEquals(allocations, ImmutableMap.of("test_tag", 10L));
 
         assertEquals(pool1.getFreeBytes(), 1000);

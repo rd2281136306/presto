@@ -117,7 +117,7 @@ public class DecimalInequalityOperators
                 .argumentTypes(DECIMAL_SIGNATURE, DECIMAL_SIGNATURE)
                 .returnType(parseTypeSignature(BOOLEAN))
                 .build();
-        return SqlScalarFunction.builder(DecimalInequalityOperators.class)
+        return SqlScalarFunction.builder(DecimalInequalityOperators.class, operatorType)
                 .signature(signature)
                 .deterministic(true);
     }
@@ -217,8 +217,8 @@ public class DecimalInequalityOperators
             return false;
         }
 
-        long leftValue = left.getLong(leftPosition, 0);
-        long rightValue = right.getLong(rightPosition, 0);
+        long leftValue = left.getLong(leftPosition);
+        long rightValue = right.getLong(rightPosition);
         return Long.compare(leftValue, rightValue) != 0;
     }
 
@@ -266,7 +266,7 @@ public class DecimalInequalityOperators
                 .argumentTypes(DECIMAL_SIGNATURE, DECIMAL_SIGNATURE, DECIMAL_SIGNATURE)
                 .returnType(parseTypeSignature(BOOLEAN))
                 .build();
-        return SqlScalarFunction.builder(DecimalInequalityOperators.class)
+        return SqlScalarFunction.builder(DecimalInequalityOperators.class, BETWEEN)
                 .signature(signature)
                 .deterministic(true)
                 .choice(choice -> choice

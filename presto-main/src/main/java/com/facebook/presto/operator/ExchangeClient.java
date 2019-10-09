@@ -13,6 +13,8 @@
  */
 package com.facebook.presto.operator;
 
+import com.facebook.presto.execution.TaskId;
+import com.facebook.presto.execution.buffer.PageCodecMarker;
 import com.facebook.presto.execution.buffer.SerializedPage;
 import com.facebook.presto.memory.context.LocalMemoryContext;
 import com.facebook.presto.operator.HttpPageBufferClient.ClientCallback;
@@ -44,18 +46,30 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
-import static com.facebook.presto.execution.buffer.PageCompression.UNCOMPRESSED;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.base.Throwables.throwIfUnchecked;
 import static com.google.common.collect.Sets.newConcurrentHashSet;
 import static io.airlift.slice.Slices.EMPTY_SLICE;
 import static java.util.Objects.requireNonNull;
 
+/**
+ * {@link ExchangeClient} is the client on receiver side, used in operators requiring data exchange from other tasks,
+ * such as {@link ExchangeOperator} and {@link MergeOperator}.
+ * For each sender that ExchangeClient receives data from, a {@link HttpPageBufferClient} is used in ExchangeClient to communicate with the sender, i.e.
+ *
+ * <pre>
+ *                    /   HttpPageBufferClient_1  - - - Remote Source 1
+ *     ExchangeClient --  HttpPageBufferClient_2  - - - Remote Source 2
+ *                    \   ...
+ *                     \  HttpPageBufferClient_n  - - - Remote Source n
+ * </pre>
+ *
+ */
 @ThreadSafe
 public class ExchangeClient
         implements Closeable
 {
-    private static final SerializedPage NO_MORE_PAGES = new SerializedPage(EMPTY_SLICE, UNCOMPRESSED, 0, 0);
+    private static final SerializedPage NO_MORE_PAGES = new SerializedPage(EMPTY_SLICE, PageCodecMarker.none(), 0, 0);
 
     private final long bufferCapacity;
     private final DataSize maxResponseSize;
@@ -69,11 +83,14 @@ public class ExchangeClient
     private boolean noMoreLocations;
 
     private final ConcurrentMap<URI, HttpPageBufferClient> allClients = new ConcurrentHashMap<>();
+    private final ConcurrentMap<TaskId, URI> taskIdToLocationMap = new ConcurrentHashMap<>();
+    private final Set<TaskId> removedRemoteSourceTaskIds = ConcurrentHashMap.newKeySet();
 
     @GuardedBy("this")
     private final Deque<HttpPageBufferClient> queuedClients = new LinkedList<>();
 
     private final Set<HttpPageBufferClient> completedClients = newConcurrentHashSet();
+    private final Set<HttpPageBufferClient> removedClients = newConcurrentHashSet();
     private final LinkedBlockingDeque<SerializedPage> pageBuffer = new LinkedBlockingDeque<>();
 
     @GuardedBy("this")
@@ -138,7 +155,7 @@ public class ExchangeClient
         }
     }
 
-    public synchronized void addLocation(URI location)
+    public synchronized void addLocation(URI location, TaskId remoteSourceTaskId)
     {
         requireNonNull(location, "location is null");
 
@@ -150,6 +167,11 @@ public class ExchangeClient
 
         // ignore duplicate locations
         if (allClients.containsKey(location)) {
+            return;
+        }
+
+        // already removed
+        if (removedRemoteSourceTaskIds.contains(remoteSourceTaskId)) {
             return;
         }
 
@@ -165,9 +187,36 @@ public class ExchangeClient
                 scheduler,
                 pageBufferClientCallbackExecutor);
         allClients.put(location, client);
+        checkState(taskIdToLocationMap.put(remoteSourceTaskId, location) == null, "Duplicate remoteSourceTaskId: " + remoteSourceTaskId);
         queuedClients.add(client);
 
         scheduleRequestIfNecessary();
+    }
+
+    public synchronized void removeRemoteSource(TaskId sourceTaskId)
+    {
+        requireNonNull(sourceTaskId, "sourceTaskId is null");
+
+        // Ignore removeRemoteSource call if exchange client is already closed
+        if (closed.get()) {
+            return;
+        }
+
+        removedRemoteSourceTaskIds.add(sourceTaskId);
+
+        URI location = taskIdToLocationMap.get(sourceTaskId);
+        if (location == null) {
+            return;
+        }
+
+        HttpPageBufferClient client = allClients.get(location);
+        if (client == null) {
+            return;
+        }
+
+        closeQuietly(client);
+        removedClients.add(client);
+        completedClients.add(client);
     }
 
     public synchronized void noMoreLocations()
@@ -303,13 +352,19 @@ public class ExchangeClient
         int pendingClients = allClients.size() - queuedClients.size() - completedClients.size();
         clientCount -= pendingClients;
 
-        for (int i = 0; i < clientCount; i++) {
+        for (int i = 0; i < clientCount; ) {
             HttpPageBufferClient client = queuedClients.poll();
             if (client == null) {
                 // no more clients available
                 return;
             }
+
+            if (removedClients.contains(client)) {
+                continue;
+            }
+
             client.scheduleRequest();
+            i++;
         }
     }
 
@@ -379,8 +434,13 @@ public class ExchangeClient
         scheduleRequestIfNecessary();
     }
 
-    private synchronized void clientFailed(Throwable cause)
+    private synchronized void clientFailed(HttpPageBufferClient client, Throwable cause)
     {
+        // ignore failure for removed clients
+        if (removedClients.contains(client)) {
+            return;
+        }
+
         // TODO: properly handle the failed vs closed state
         // it is important not to treat failures as a successful close
         if (!isClosed()) {
@@ -432,7 +492,8 @@ public class ExchangeClient
         {
             requireNonNull(client, "client is null");
             requireNonNull(cause, "cause is null");
-            ExchangeClient.this.clientFailed(cause);
+
+            ExchangeClient.this.clientFailed(client, cause);
         }
     }
 

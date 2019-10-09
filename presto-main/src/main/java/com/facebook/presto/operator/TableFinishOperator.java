@@ -14,31 +14,42 @@
 package com.facebook.presto.operator;
 
 import com.facebook.presto.Session;
+import com.facebook.presto.execution.Lifespan;
+import com.facebook.presto.execution.TaskId;
 import com.facebook.presto.operator.OperationTimer.OperationTiming;
 import com.facebook.presto.spi.Page;
 import com.facebook.presto.spi.PageBuilder;
 import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.connector.ConnectorOutputMetadata;
+import com.facebook.presto.spi.plan.PlanNodeId;
 import com.facebook.presto.spi.statistics.ComputedStatistics;
 import com.facebook.presto.spi.type.Type;
-import com.facebook.presto.sql.planner.plan.PlanNodeId;
 import com.facebook.presto.sql.planner.plan.StatisticAggregationsDescriptor;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableList;
 import com.google.common.util.concurrent.ListenableFuture;
+import io.airlift.json.JsonCodec;
 import io.airlift.slice.Slice;
 
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
+import java.util.stream.Stream;
 
 import static com.facebook.presto.SystemSessionProperties.isStatisticsCpuTimerEnabled;
-import static com.facebook.presto.operator.TableWriterOperator.FRAGMENT_CHANNEL;
-import static com.facebook.presto.operator.TableWriterOperator.ROW_COUNT_CHANNEL;
+import static com.facebook.presto.operator.TableWriterUtils.FRAGMENT_CHANNEL;
+import static com.facebook.presto.operator.TableWriterUtils.ROW_COUNT_CHANNEL;
+import static com.facebook.presto.operator.TableWriterUtils.extractStatisticsRows;
+import static com.facebook.presto.operator.TableWriterUtils.getTableCommitContext;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.facebook.presto.spi.type.VarbinaryType.VARBINARY;
+import static com.google.common.base.MoreObjects.toStringHelper;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.base.Verify.verify;
+import static com.google.common.collect.ImmutableList.toImmutableList;
 import static io.airlift.units.Duration.succinctNanos;
 import static java.util.Objects.requireNonNull;
 
@@ -53,25 +64,32 @@ public class TableFinishOperator
         private final int operatorId;
         private final PlanNodeId planNodeId;
         private final TableFinisher tableFinisher;
+        private final LifespanCommitter lifespanCommitter;
         private final OperatorFactory statisticsAggregationOperatorFactory;
         private final StatisticAggregationsDescriptor<Integer> descriptor;
         private final Session session;
+        private final JsonCodec<TableCommitContext> tableCommitContextCodec;
+
         private boolean closed;
 
         public TableFinishOperatorFactory(
                 int operatorId,
                 PlanNodeId planNodeId,
                 TableFinisher tableFinisher,
+                LifespanCommitter lifespanCommitter,
                 OperatorFactory statisticsAggregationOperatorFactory,
                 StatisticAggregationsDescriptor<Integer> descriptor,
-                Session session)
+                Session session,
+                JsonCodec<TableCommitContext> tableCommitContextCodec)
         {
             this.operatorId = operatorId;
             this.planNodeId = requireNonNull(planNodeId, "planNodeId is null");
             this.tableFinisher = requireNonNull(tableFinisher, "tableFinisher is null");
+            this.lifespanCommitter = requireNonNull(lifespanCommitter, "lifespanCommitter is null");
             this.statisticsAggregationOperatorFactory = requireNonNull(statisticsAggregationOperatorFactory, "statisticsAggregationOperatorFactory is null");
             this.descriptor = requireNonNull(descriptor, "descriptor is null");
             this.session = requireNonNull(session, "session is null");
+            this.tableCommitContextCodec = requireNonNull(tableCommitContextCodec, "tableCommitContextCodec is null");
         }
 
         @Override
@@ -81,7 +99,7 @@ public class TableFinishOperator
             OperatorContext context = driverContext.addOperatorContext(operatorId, planNodeId, TableFinishOperator.class.getSimpleName());
             Operator statisticsAggregationOperator = statisticsAggregationOperatorFactory.createOperator(driverContext);
             boolean statisticsCpuTimerEnabled = !(statisticsAggregationOperator instanceof DevNullOperator) && isStatisticsCpuTimerEnabled(session);
-            return new TableFinishOperator(context, tableFinisher, statisticsAggregationOperator, descriptor, statisticsCpuTimerEnabled);
+            return new TableFinishOperator(context, tableFinisher, lifespanCommitter, statisticsAggregationOperator, descriptor, statisticsCpuTimerEnabled, tableCommitContextCodec);
         }
 
         @Override
@@ -93,7 +111,7 @@ public class TableFinishOperator
         @Override
         public OperatorFactory duplicate()
         {
-            return new TableFinishOperatorFactory(operatorId, planNodeId, tableFinisher, statisticsAggregationOperatorFactory, descriptor, session);
+            return new TableFinishOperatorFactory(operatorId, planNodeId, tableFinisher, lifespanCommitter, statisticsAggregationOperatorFactory, descriptor, session, tableCommitContextCodec);
         }
     }
 
@@ -108,26 +126,31 @@ public class TableFinishOperator
     private final StatisticAggregationsDescriptor<Integer> descriptor;
 
     private State state = State.RUNNING;
-    private long rowCount;
     private Optional<ConnectorOutputMetadata> outputMetadata = Optional.empty();
-    private final ImmutableList.Builder<Slice> fragmentBuilder = ImmutableList.builder();
     private final ImmutableList.Builder<ComputedStatistics> computedStatisticsBuilder = ImmutableList.builder();
 
     private final OperationTiming statisticsTiming = new OperationTiming();
     private final boolean statisticsCpuTimerEnabled;
 
+    private final JsonCodec<TableCommitContext> tableCommitContextCodec;
+    private final LifespanAndStageStateTracker lifespanAndStageStateTracker;
+
     public TableFinishOperator(
             OperatorContext operatorContext,
             TableFinisher tableFinisher,
+            LifespanCommitter lifespanCommitter,
             Operator statisticsAggregationOperator,
             StatisticAggregationsDescriptor<Integer> descriptor,
-            boolean statisticsCpuTimerEnabled)
+            boolean statisticsCpuTimerEnabled,
+            JsonCodec<TableCommitContext> tableCommitContextCodec)
     {
         this.operatorContext = requireNonNull(operatorContext, "operatorContext is null");
         this.tableFinisher = requireNonNull(tableFinisher, "tableCommitter is null");
         this.statisticsAggregationOperator = requireNonNull(statisticsAggregationOperator, "statisticsAggregationOperator is null");
         this.descriptor = requireNonNull(descriptor, "descriptor is null");
         this.statisticsCpuTimerEnabled = statisticsCpuTimerEnabled;
+        this.tableCommitContextCodec = requireNonNull(tableCommitContextCodec, "tableCommitContextCodec is null");
+        this.lifespanAndStageStateTracker = new LifespanAndStageStateTracker(lifespanCommitter);
 
         operatorContext.setInfoSupplier(this::getInfo);
     }
@@ -181,88 +204,13 @@ public class TableFinishOperator
         requireNonNull(page, "page is null");
         checkState(state == State.RUNNING, "Operator is %s", state);
 
-        Block rowCountBlock = page.getBlock(ROW_COUNT_CHANNEL);
-        Block fragmentBlock = page.getBlock(FRAGMENT_CHANNEL);
-        for (int position = 0; position < page.getPositionCount(); position++) {
-            if (!rowCountBlock.isNull(position)) {
-                rowCount += BIGINT.getLong(rowCountBlock, position);
-            }
-            if (!fragmentBlock.isNull(position)) {
-                fragmentBuilder.add(VARBINARY.getSlice(fragmentBlock, position));
-            }
-        }
-
-        extractStatisticsRows(page).ifPresent(statisticsPage -> {
+        TableCommitContext tableCommitContext = getTableCommitContext(page, tableCommitContextCodec);
+        lifespanAndStageStateTracker.update(page, tableCommitContext);
+        lifespanAndStageStateTracker.getStatisticsPagesToProcess(page, tableCommitContext).forEach(statisticsPage -> {
             OperationTimer timer = new OperationTimer(statisticsCpuTimerEnabled);
             statisticsAggregationOperator.addInput(statisticsPage);
             timer.end(statisticsTiming);
         });
-    }
-
-    private static Optional<Page> extractStatisticsRows(Page page)
-    {
-        int statisticsPositionCount = 0;
-        for (int position = 0; position < page.getPositionCount(); position++) {
-            if (isStatisticsPosition(page, position)) {
-                statisticsPositionCount++;
-            }
-        }
-
-        if (statisticsPositionCount == 0) {
-            return Optional.empty();
-        }
-
-        if (statisticsPositionCount == page.getPositionCount()) {
-            return Optional.of(page);
-        }
-
-        int selectedPositionsIndex = 0;
-        int[] selectedPositions = new int[statisticsPositionCount];
-        for (int position = 0; position < page.getPositionCount(); position++) {
-            if (isStatisticsPosition(page, position)) {
-                selectedPositions[selectedPositionsIndex] = position;
-                selectedPositionsIndex++;
-            }
-        }
-
-        Block[] blocks = new Block[page.getChannelCount()];
-        for (int channel = 0; channel < page.getChannelCount(); channel++) {
-            blocks[channel] = page.getBlock(channel).getPositions(selectedPositions, 0, statisticsPositionCount);
-        }
-        return Optional.of(new Page(statisticsPositionCount, blocks));
-    }
-
-    /**
-     * Both the statistics and the row_count + fragments are transferred over the same communication
-     * link between the TableWriterOperator and the TableFinishOperator. Thus the multiplexing is needed.
-     * <p>
-     * The transferred page layout looks like:
-     * <p>
-     * [[row_count_channel], [fragment_channel], [statistic_channel_1] ... [statistic_channel_N]]
-     * <p>
-     * [row_count_channel] - contains number of rows processed by a TableWriterOperator instance
-     * [fragment_channel] - contains arbitrary binary data provided by the ConnectorPageSink#finish for
-     * the further post processing on the coordinator
-     * <p>
-     * [statistic_channel_1] ... [statistic_channel_N] - contain pre-aggregated statistics computed by the
-     * statistics aggregation operator within the
-     * TableWriterOperator
-     * <p>
-     * Since the final aggregation operator in the TableFinishOperator doesn't know what to do with the
-     * first two channels, those must be pruned. For the convenience we never set both, the
-     * [row_count_channel] + [fragment_channel] and the [statistic_channel_1] ... [statistic_channel_N].
-     * <p>
-     * If this is a row that holds statistics - the [row_count_channel] + [fragment_channel] will be NULL.
-     * <p>
-     * It this is a row that holds the row count or the fragment - all the statistics channels will be set
-     * to NULL.
-     * <p>
-     * Since neither [row_count_channel] or [fragment_channel] cannot hold the NULL value naturally, by
-     * checking isNull on these two channels we can determine if this is a row that contains statistics.
-     */
-    private static boolean isStatisticsPosition(Page page, int position)
-    {
-        return page.getBlock(ROW_COUNT_CHANNEL).isNull(position) && page.getBlock(FRAGMENT_CHANNEL).isNull(position);
     }
 
     @Override
@@ -293,13 +241,13 @@ public class TableFinishOperator
         }
         state = State.FINISHED;
 
-        outputMetadata = tableFinisher.finishTable(fragmentBuilder.build(), computedStatisticsBuilder.build());
+        outputMetadata = tableFinisher.finishTable(lifespanAndStageStateTracker.getFinalFragments(), computedStatisticsBuilder.build());
 
         // output page will only be constructed once,
         // so a new PageBuilder is constructed (instead of using PageBuilder.reset)
         PageBuilder page = new PageBuilder(1, TYPES);
         page.declarePosition();
-        BIGINT.writeLong(page.getBlockBuilder(0), rowCount);
+        BIGINT.writeLong(page.getBlockBuilder(0), lifespanAndStageStateTracker.getFinalRowCount());
         return page.build();
     }
 
@@ -341,5 +289,175 @@ public class TableFinishOperator
     public interface TableFinisher
     {
         Optional<ConnectorOutputMetadata> finishTable(Collection<Slice> fragments, Collection<ComputedStatistics> computedStatistics);
+    }
+
+    public interface LifespanCommitter
+    {
+        void commitLifespan(Collection<Slice> fragments);
+    }
+
+    // A lifespan in a stage defines the unit for commit and recovery in recoverable grouped execution
+    private static class LifespanAndStageStateTracker
+    {
+        private final Map<LifespanAndStage, LifespanAndStageState> unrecoverableLifespanAndStageStates = new HashMap<>();
+
+        // For recoverable execution, it is possible to receive pages of the same lifespan-stage from different tasks. We track all of them and commit the one
+        // which finishes sending pages first.
+        private final Map<LifespanAndStage, Map<TaskId, LifespanAndStageState>> uncommittedRecoverableLifespanAndStageStates = new HashMap<>();
+        private final Map<LifespanAndStage, LifespanAndStageState> committedRecoverableLifespanAndStages = new HashMap<>();
+
+        private final LifespanCommitter lifespanCommitter;
+
+        LifespanAndStageStateTracker(LifespanCommitter lifespanCommitter)
+        {
+            this.lifespanCommitter = requireNonNull(lifespanCommitter, "lifespanCommitter is null");
+        }
+
+        public void update(Page page, TableCommitContext tableCommitContext)
+        {
+            LifespanAndStage lifespanAndStage = LifespanAndStage.fromTableCommitContext(tableCommitContext);
+            if (committedRecoverableLifespanAndStages.containsKey(lifespanAndStage)) {
+                return;
+            }
+
+            if (!tableCommitContext.isLifespanCommitRequired()) {
+                unrecoverableLifespanAndStageStates.computeIfAbsent(lifespanAndStage, ignored -> new LifespanAndStageState()).update(page);
+                return;
+            }
+
+            Map<TaskId, LifespanAndStageState> lifespanStageStatesPerTask = uncommittedRecoverableLifespanAndStageStates.computeIfAbsent(lifespanAndStage, ignored -> new HashMap<>());
+            lifespanStageStatesPerTask.computeIfAbsent(tableCommitContext.getTaskId(), ignored -> new LifespanAndStageState()).update(page);
+
+            if (tableCommitContext.isLastPage()) {
+                checkState(!committedRecoverableLifespanAndStages.containsKey(lifespanAndStage), "LifespanAndStage already finished");
+                LifespanAndStageState lifespanAndStageState = lifespanStageStatesPerTask.get(tableCommitContext.getTaskId());
+                committedRecoverableLifespanAndStages.put(lifespanAndStage, lifespanAndStageState);
+                uncommittedRecoverableLifespanAndStageStates.remove(lifespanAndStage);
+                lifespanCommitter.commitLifespan(lifespanAndStageState.getFragments());
+            }
+        }
+
+        List<Page> getStatisticsPagesToProcess(Page page, TableCommitContext tableCommitContext)
+        {
+            LifespanAndStage lifespanAndStage = LifespanAndStage.fromTableCommitContext(tableCommitContext);
+            if (!tableCommitContext.isLifespanCommitRequired()) {
+                return extractStatisticsRows(page).map(ImmutableList::of).orElse(ImmutableList.of());
+            }
+            if (!committedRecoverableLifespanAndStages.containsKey(lifespanAndStage)) {
+                return ImmutableList.of();
+            }
+            checkState(!uncommittedRecoverableLifespanAndStageStates.containsKey(lifespanAndStage), "lifespanAndStage %s is already committed", lifespanAndStage);
+            return committedRecoverableLifespanAndStages.get(lifespanAndStage).getStatisticsPages();
+        }
+
+        public long getFinalRowCount()
+        {
+            checkState(uncommittedRecoverableLifespanAndStageStates.isEmpty(), "All recoverable LifespanAndStage should be committed when fetching final row count");
+            return Stream.concat(unrecoverableLifespanAndStageStates.values().stream(), committedRecoverableLifespanAndStages.values().stream())
+                    .mapToLong(LifespanAndStageState::getRowCount)
+                    .sum();
+        }
+
+        public List<Slice> getFinalFragments()
+        {
+            checkState(uncommittedRecoverableLifespanAndStageStates.isEmpty(), "All recoverable LifespanAndStage should be committed when fetching final fragments");
+            return Stream.concat(unrecoverableLifespanAndStageStates.values().stream(), committedRecoverableLifespanAndStages.values().stream())
+                    .map(LifespanAndStageState::getFragments)
+                    .flatMap(List::stream)
+                    .collect(toImmutableList());
+        }
+
+        private static class LifespanAndStage
+        {
+            private final Lifespan lifespan;
+            private final int stageId;
+
+            private LifespanAndStage(Lifespan lifespan, int stageId)
+            {
+                this.lifespan = requireNonNull(lifespan, "lifespan is null");
+                this.stageId = stageId;
+            }
+
+            public static LifespanAndStage fromTableCommitContext(TableCommitContext operatorExecutionContext)
+            {
+                return new LifespanAndStage(operatorExecutionContext.getLifespan(), operatorExecutionContext.getTaskId().getStageExecutionId().getStageId().getId());
+            }
+
+            public Lifespan getLifespan()
+            {
+                return lifespan;
+            }
+
+            public int getStageId()
+            {
+                return stageId;
+            }
+
+            @Override
+            public boolean equals(Object o)
+            {
+                if (this == o) {
+                    return true;
+                }
+                if (!(o instanceof LifespanAndStage)) {
+                    return false;
+                }
+                LifespanAndStage that = (LifespanAndStage) o;
+                return stageId == that.stageId &&
+                        Objects.equals(lifespan, that.lifespan);
+            }
+
+            @Override
+            public int hashCode()
+            {
+                return Objects.hash(lifespan, stageId);
+            }
+
+            @Override
+            public String toString()
+            {
+                return toStringHelper(this)
+                        .add("lifespan", lifespan)
+                        .add("stageId", stageId)
+                        .toString();
+            }
+        }
+
+        private static class LifespanAndStageState
+        {
+            private long rowCount;
+            private ImmutableList.Builder<Slice> fragmentBuilder = ImmutableList.builder();
+            private ImmutableList.Builder<Page> statisticsPages = ImmutableList.builder();
+
+            public void update(Page page)
+            {
+                Block rowCountBlock = page.getBlock(ROW_COUNT_CHANNEL);
+                Block fragmentBlock = page.getBlock(FRAGMENT_CHANNEL);
+                for (int position = 0; position < page.getPositionCount(); position++) {
+                    if (!rowCountBlock.isNull(position)) {
+                        rowCount += BIGINT.getLong(rowCountBlock, position);
+                    }
+                    if (!fragmentBlock.isNull(position)) {
+                        fragmentBuilder.add(VARBINARY.getSlice(fragmentBlock, position));
+                    }
+                }
+                extractStatisticsRows(page).ifPresent(statisticsPages::add);
+            }
+
+            public long getRowCount()
+            {
+                return rowCount;
+            }
+
+            public List<Slice> getFragments()
+            {
+                return fragmentBuilder.build();
+            }
+
+            public List<Page> getStatisticsPages()
+            {
+                return statisticsPages.build();
+            }
+        }
     }
 }

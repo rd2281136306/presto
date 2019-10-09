@@ -118,10 +118,10 @@ public class MockQueryExecution
                         new Duration(8, NANOSECONDS),
 
                         new Duration(100, NANOSECONDS),
-                        new Duration(200, NANOSECONDS),
 
                         9,
                         10,
+                        11,
                         11,
 
                         12,
@@ -153,12 +153,12 @@ public class MockQueryExecution
 
                         new DataSize(28, BYTE),
                         29,
-
-                        new DataSize(30, BYTE),
-
+                        30,
+                        new DataSize(31, BYTE),
+                        new DataSize(32, BYTE),
+                        new DataSize(33, BYTE),
                         ImmutableList.of(),
                         ImmutableList.of()),
-                Optional.empty(),
                 Optional.empty(),
                 Optional.empty(),
                 ImmutableMap.of(),
@@ -176,6 +176,8 @@ public class MockQueryExecution
                 ImmutableSet.of(),
                 Optional.empty(),
                 state.isDone(),
+                Optional.empty(),
+                Optional.empty(),
                 Optional.empty());
     }
 
@@ -260,6 +262,12 @@ public class MockQueryExecution
     public BasicQueryInfo getBasicQueryInfo()
     {
         return new BasicQueryInfo(getQueryInfo());
+    }
+
+    @Override
+    public int getRunningTaskCount()
+    {
+        return getQueryInfo().getQueryStats().getRunningTasks();
     }
 
     @Override

@@ -21,6 +21,7 @@ import java.util.Optional;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static io.airlift.units.Duration.succinctNanos;
+import static java.lang.Math.max;
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.concurrent.TimeUnit.NANOSECONDS;
@@ -45,9 +46,6 @@ class QueryStateTimer
 
     private final AtomicReference<Long> beginAnalysisNanos = new AtomicReference<>();
     private final AtomicReference<Duration> analysisTime = new AtomicReference<>();
-
-    private final AtomicReference<Long> beginDistributedPlanningNanos = new AtomicReference<>();
-    private final AtomicReference<Duration> distributedPlanningTime = new AtomicReference<>();
 
     private final AtomicReference<Long> lastHeartbeatNanos;
 
@@ -144,16 +142,6 @@ class QueryStateTimer
         analysisTime.compareAndSet(null, nanosSince(beginAnalysisNanos, tickerNanos()));
     }
 
-    public void beginDistributedPlanning()
-    {
-        beginDistributedPlanningNanos.compareAndSet(null, tickerNanos());
-    }
-
-    public void endDistributedPlanning()
-    {
-        distributedPlanningTime.compareAndSet(null, nanosSince(beginDistributedPlanningNanos, tickerNanos()));
-    }
-
     public void recordHeartbeat()
     {
         lastHeartbeatNanos.set(tickerNanos());
@@ -222,11 +210,6 @@ class QueryStateTimer
         return getDuration(analysisTime, beginAnalysisNanos);
     }
 
-    public Duration getDistributedPlanningTime()
-    {
-        return getDuration(distributedPlanningTime, beginDistributedPlanningNanos);
-    }
-
     public DateTime getLastHeartbeat()
     {
         return toDateTime(lastHeartbeatNanos.get());
@@ -252,7 +235,7 @@ class QueryStateTimer
 
     private static Duration nanosSince(long start, long now)
     {
-        return succinctNanos(now - start);
+        return succinctNanos(max(0, now - start));
     }
 
     private Duration getDuration(AtomicReference<Duration> finalDuration, AtomicReference<Long> start)

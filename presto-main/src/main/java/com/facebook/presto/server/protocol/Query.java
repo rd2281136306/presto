@@ -25,6 +25,8 @@ import com.facebook.presto.execution.QueryInfo;
 import com.facebook.presto.execution.QueryManager;
 import com.facebook.presto.execution.QueryState;
 import com.facebook.presto.execution.QueryStats;
+import com.facebook.presto.execution.StageExecutionInfo;
+import com.facebook.presto.execution.StageExecutionStats;
 import com.facebook.presto.execution.StageInfo;
 import com.facebook.presto.execution.TaskInfo;
 import com.facebook.presto.execution.buffer.PagesSerde;
@@ -85,7 +87,9 @@ import static com.google.common.util.concurrent.MoreExecutors.directExecutor;
 import static io.airlift.concurrent.MoreFutures.addSuccessCallback;
 import static io.airlift.concurrent.MoreFutures.addTimeout;
 import static java.lang.String.format;
+import static java.util.Locale.ENGLISH;
 import static java.util.Objects.requireNonNull;
+import static java.util.UUID.randomUUID;
 
 @ThreadSafe
 class Query
@@ -94,6 +98,7 @@ class Query
 
     private final QueryManager queryManager;
     private final QueryId queryId;
+    private final String slug = "x" + randomUUID().toString().toLowerCase(ENGLISH).replace("-", "");
 
     @GuardedBy("this")
     private final ExchangeClient exchangeClient;
@@ -130,9 +135,6 @@ class Query
 
     @GuardedBy("this")
     private Optional<String> setSchema = Optional.empty();
-
-    @GuardedBy("this")
-    private Optional<String> setPath = Optional.empty();
 
     @GuardedBy("this")
     private Map<String, String> setSessionProperties = ImmutableMap.of();
@@ -242,6 +244,11 @@ class Query
         return queryId;
     }
 
+    public boolean isSlugValid(String slug)
+    {
+        return this.slug.equals(slug);
+    }
+
     public synchronized Optional<String> getSetCatalog()
     {
         return setCatalog;
@@ -250,11 +257,6 @@ class Query
     public synchronized Optional<String> getSetSchema()
     {
         return setSchema;
-    }
-
-    public synchronized Optional<String> getSetPath()
-    {
-        return setPath;
     }
 
     public synchronized Map<String, String> getSetSessionProperties()
@@ -474,10 +476,9 @@ class Query
             nextResultsUri = createNextResultsUri(scheme, uriInfo);
         }
 
-        // update catalog, schema, and path
+        // update catalog and schema
         setCatalog = queryInfo.getSetCatalog();
         setSchema = queryInfo.getSetSchema();
-        setPath = queryInfo.getSetPath();
 
         // update setSessionProperties
         setSessionProperties = queryInfo.getSetSessionProperties();
@@ -551,9 +552,7 @@ class Query
             types = outputInfo.getColumnTypes();
         }
 
-        for (URI outputLocation : outputInfo.getBufferLocations()) {
-            exchangeClient.addLocation(outputLocation);
-        }
+        outputInfo.getBufferLocations().forEach(exchangeClient::addLocation);
         if (outputInfo.isNoMoreBufferLocations()) {
             exchangeClient.noMoreLocations();
         }
@@ -575,6 +574,7 @@ class Query
                 .path(queryId.toString())
                 .path(String.valueOf(resultId.incrementAndGet()))
                 .replaceQuery("")
+                .queryParam("slug", slug)
                 .build();
     }
 
@@ -610,7 +610,8 @@ class Query
             return null;
         }
 
-        com.facebook.presto.execution.StageStats stageStats = stageInfo.getStageStats();
+        StageExecutionInfo currentStageExecutionInfo = stageInfo.getLatestAttemptExecutionInfo();
+        StageExecutionStats stageExecutionStats = currentStageExecutionInfo.getStats();
 
         ImmutableList.Builder<StageStats> subStages = ImmutableList.builder();
         for (StageInfo subStage : stageInfo.getSubStages()) {
@@ -618,7 +619,7 @@ class Query
         }
 
         Set<String> uniqueNodes = new HashSet<>();
-        for (TaskInfo task : stageInfo.getTasks()) {
+        for (TaskInfo task : currentStageExecutionInfo.getTasks()) {
             // todo add nodeId to TaskInfo
             URI uri = task.getTaskStatus().getSelf();
             uniqueNodes.add(uri.getHost() + ":" + uri.getPort());
@@ -626,17 +627,17 @@ class Query
 
         return StageStats.builder()
                 .setStageId(String.valueOf(stageInfo.getStageId().getId()))
-                .setState(stageInfo.getState().toString())
-                .setDone(stageInfo.getState().isDone())
+                .setState(currentStageExecutionInfo.getState().toString())
+                .setDone(currentStageExecutionInfo.getState().isDone())
                 .setNodes(uniqueNodes.size())
-                .setTotalSplits(stageStats.getTotalDrivers())
-                .setQueuedSplits(stageStats.getQueuedDrivers())
-                .setRunningSplits(stageStats.getRunningDrivers() + stageStats.getBlockedDrivers())
-                .setCompletedSplits(stageStats.getCompletedDrivers())
-                .setCpuTimeMillis(stageStats.getTotalCpuTime().toMillis())
-                .setWallTimeMillis(stageStats.getTotalScheduledTime().toMillis())
-                .setProcessedRows(stageStats.getRawInputPositions())
-                .setProcessedBytes(stageStats.getRawInputDataSize().toBytes())
+                .setTotalSplits(stageExecutionStats.getTotalDrivers())
+                .setQueuedSplits(stageExecutionStats.getQueuedDrivers())
+                .setRunningSplits(stageExecutionStats.getRunningDrivers() + stageExecutionStats.getBlockedDrivers())
+                .setCompletedSplits(stageExecutionStats.getCompletedDrivers())
+                .setCpuTimeMillis(stageExecutionStats.getTotalCpuTime().toMillis())
+                .setWallTimeMillis(stageExecutionStats.getTotalScheduledTime().toMillis())
+                .setProcessedRows(stageExecutionStats.getRawInputPositions())
+                .setProcessedBytes(stageExecutionStats.getRawInputDataSize().toBytes())
                 .setSubStages(subStages.build())
                 .build();
     }
@@ -647,7 +648,7 @@ class Query
             return ImmutableSet.of();
         }
         ImmutableSet.Builder<String> nodes = ImmutableSet.builder();
-        for (TaskInfo task : stageInfo.getTasks()) {
+        for (TaskInfo task : stageInfo.getLatestAttemptExecutionInfo().getTasks()) {
             // todo add nodeId to TaskInfo
             URI uri = task.getTaskStatus().getSelf();
             nodes.add(uri.getHost() + ":" + uri.getPort());
@@ -668,7 +669,7 @@ class Query
     private static URI findCancelableLeafStage(StageInfo stage)
     {
         // if this stage is already done, we can't cancel it
-        if (stage.getState().isDone()) {
+        if (stage.getLatestAttemptExecutionInfo().getState().isDone()) {
             return null;
         }
 

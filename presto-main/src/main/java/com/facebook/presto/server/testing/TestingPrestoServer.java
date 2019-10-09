@@ -13,7 +13,6 @@
  */
 package com.facebook.presto.server.testing;
 
-import com.facebook.presto.connector.ConnectorId;
 import com.facebook.presto.connector.ConnectorManager;
 import com.facebook.presto.cost.StatsCalculator;
 import com.facebook.presto.eventlistener.EventListenerManager;
@@ -27,6 +26,7 @@ import com.facebook.presto.memory.ClusterMemoryManager;
 import com.facebook.presto.memory.LocalMemoryManager;
 import com.facebook.presto.metadata.AllNodes;
 import com.facebook.presto.metadata.CatalogManager;
+import com.facebook.presto.metadata.InternalNode;
 import com.facebook.presto.metadata.InternalNodeManager;
 import com.facebook.presto.metadata.Metadata;
 import com.facebook.presto.security.AccessControl;
@@ -37,13 +37,14 @@ import com.facebook.presto.server.ServerMainModule;
 import com.facebook.presto.server.ShutdownAction;
 import com.facebook.presto.server.security.ServerSecurityModule;
 import com.facebook.presto.server.smile.SmileModule;
-import com.facebook.presto.spi.Node;
+import com.facebook.presto.spi.ConnectorId;
 import com.facebook.presto.spi.Plugin;
 import com.facebook.presto.spi.QueryId;
 import com.facebook.presto.split.PageSourceManager;
 import com.facebook.presto.split.SplitManager;
 import com.facebook.presto.sql.analyzer.FeaturesConfig;
 import com.facebook.presto.sql.parser.SqlParserOptions;
+import com.facebook.presto.sql.planner.ConnectorPlanOptimizerManager;
 import com.facebook.presto.sql.planner.NodePartitioningManager;
 import com.facebook.presto.sql.planner.Plan;
 import com.facebook.presto.testing.ProcedureTester;
@@ -128,6 +129,7 @@ public class TestingPrestoServer
     private final SplitManager splitManager;
     private final PageSourceManager pageSourceManager;
     private final NodePartitioningManager nodePartitioningManager;
+    private final ConnectorPlanOptimizerManager planOptimizerManager;
     private final ClusterMemoryManager clusterMemoryManager;
     private final LocalMemoryManager localMemoryManager;
     private final InternalNodeManager nodeManager;
@@ -304,12 +306,14 @@ public class TestingPrestoServer
         if (coordinator) {
             resourceGroupManager = Optional.of(injector.getInstance(InternalResourceGroupManager.class));
             nodePartitioningManager = injector.getInstance(NodePartitioningManager.class);
+            planOptimizerManager = injector.getInstance(ConnectorPlanOptimizerManager.class);
             clusterMemoryManager = injector.getInstance(ClusterMemoryManager.class);
             statsCalculator = injector.getInstance(StatsCalculator.class);
         }
         else {
             resourceGroupManager = Optional.empty();
             nodePartitioningManager = null;
+            planOptimizerManager = null;
             clusterMemoryManager = null;
             statsCalculator = null;
         }
@@ -455,6 +459,11 @@ public class TestingPrestoServer
         return nodePartitioningManager;
     }
 
+    public ConnectorPlanOptimizerManager getPlanOptimizerManager()
+    {
+        return planOptimizerManager;
+    }
+
     public LocalMemoryManager getLocalMemoryManager()
     {
         return localMemoryManager;
@@ -493,7 +502,7 @@ public class TestingPrestoServer
         return nodeManager.getAllNodes();
     }
 
-    public Set<Node> getActiveNodesWithConnector(ConnectorId connectorId)
+    public Set<InternalNode> getActiveNodesWithConnector(ConnectorId connectorId)
     {
         return nodeManager.getActiveConnectorNodes(connectorId);
     }

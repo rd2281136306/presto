@@ -18,7 +18,6 @@ import com.facebook.presto.operator.scalar.ScalarFunctionImplementation;
 import com.facebook.presto.operator.scalar.ScalarFunctionImplementation.ArgumentProperty;
 import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.function.FunctionHandle;
-import com.facebook.presto.spi.function.Signature;
 import com.google.common.base.Defaults;
 
 import java.lang.invoke.MethodHandle;
@@ -27,6 +26,7 @@ import java.util.Arrays;
 import java.util.List;
 
 import static com.facebook.presto.operator.scalar.ScalarFunctionImplementation.ArgumentType.VALUE_TYPE;
+import static com.facebook.presto.operator.scalar.ScalarFunctionImplementation.NullConvention.RETURN_NULL_ON_NULL;
 import static com.facebook.presto.operator.scalar.ScalarFunctionImplementation.NullConvention.USE_NULL_FLAG;
 import static com.google.common.base.Throwables.throwIfUnchecked;
 import static java.lang.invoke.MethodHandleProxies.asInterfaceInstance;
@@ -51,16 +51,6 @@ public class InterpretedFunctionInvoker
         return invoke(functionManager.getScalarFunctionImplementation(functionHandle), session, arguments);
     }
 
-    public Object invoke(Signature function, ConnectorSession session, Object... arguments)
-    {
-        return invoke(function, session, Arrays.asList(arguments));
-    }
-
-    public Object invoke(Signature function, ConnectorSession session, List<Object> arguments)
-    {
-        return invoke(functionManager.getScalarFunctionImplementation(function), session, arguments);
-    }
-
     /**
      * Arguments must be the native container type for the corresponding SQL types.
      * <p>
@@ -81,7 +71,13 @@ public class InterpretedFunctionInvoker
             Object argument = arguments.get(i);
             ArgumentProperty argumentProperty = function.getArgumentProperty(i);
             if (argumentProperty.getArgumentType() == VALUE_TYPE) {
-                if (function.getArgumentProperty(i).getNullConvention() == USE_NULL_FLAG) {
+                if (function.getArgumentProperty(i).getNullConvention() == RETURN_NULL_ON_NULL) {
+                    if (argument == null) {
+                        return null;
+                    }
+                    actualArguments.add(argument);
+                }
+                else if (function.getArgumentProperty(i).getNullConvention() == USE_NULL_FLAG) {
                     boolean isNull = argument == null;
                     if (isNull) {
                         argument = Defaults.defaultValue(method.type().parameterType(actualArguments.size()));

@@ -29,8 +29,8 @@ import static com.facebook.presto.SystemSessionProperties.JOIN_DISTRIBUTION_TYPE
 import static com.facebook.presto.SystemSessionProperties.QUERY_MAX_MEMORY;
 import static com.facebook.presto.client.PrestoHeaders.PRESTO_CATALOG;
 import static com.facebook.presto.client.PrestoHeaders.PRESTO_CLIENT_INFO;
+import static com.facebook.presto.client.PrestoHeaders.PRESTO_EXTRA_CREDENTIAL;
 import static com.facebook.presto.client.PrestoHeaders.PRESTO_LANGUAGE;
-import static com.facebook.presto.client.PrestoHeaders.PRESTO_PATH;
 import static com.facebook.presto.client.PrestoHeaders.PRESTO_PREPARED_STATEMENT;
 import static com.facebook.presto.client.PrestoHeaders.PRESTO_ROLE;
 import static com.facebook.presto.client.PrestoHeaders.PRESTO_SCHEMA;
@@ -51,7 +51,6 @@ public class TestHttpRequestSessionContext
                         .put(PRESTO_SOURCE, "testSource")
                         .put(PRESTO_CATALOG, "testCatalog")
                         .put(PRESTO_SCHEMA, "testSchema")
-                        .put(PRESTO_PATH, "testPath")
                         .put(PRESTO_LANGUAGE, "zh-TW")
                         .put(PRESTO_TIME_ZONE, "Asia/Taipei")
                         .put(PRESTO_CLIENT_INFO, "client-info")
@@ -61,6 +60,8 @@ public class TestHttpRequestSessionContext
                         .put(PRESTO_ROLE, "foo_connector=ALL")
                         .put(PRESTO_ROLE, "bar_connector=NONE")
                         .put(PRESTO_ROLE, "foobar_connector=ROLE{role}")
+                        .put(PRESTO_EXTRA_CREDENTIAL, "test.token.foo=bar")
+                        .put(PRESTO_EXTRA_CREDENTIAL, "test.token.abc=xyz")
                         .build(),
                 "testRemote");
 
@@ -68,7 +69,6 @@ public class TestHttpRequestSessionContext
         assertEquals(context.getSource(), "testSource");
         assertEquals(context.getCatalog(), "testCatalog");
         assertEquals(context.getSchema(), "testSchema");
-        assertEquals(context.getPath(), "testPath");
         assertEquals(context.getIdentity(), new Identity("testUser", Optional.empty()));
         assertEquals(context.getClientInfo(), "client-info");
         assertEquals(context.getLanguage(), "zh-TW");
@@ -79,6 +79,7 @@ public class TestHttpRequestSessionContext
                 "foo_connector", new SelectedRole(SelectedRole.Type.ALL, Optional.empty()),
                 "bar_connector", new SelectedRole(SelectedRole.Type.NONE, Optional.empty()),
                 "foobar_connector", new SelectedRole(SelectedRole.Type.ROLE, Optional.of("role"))));
+        assertEquals(context.getIdentity().getExtraCredentials(), ImmutableMap.of("test.token.foo", "bar", "test.token.abc", "xyz"));
     }
 
     @Test(expectedExceptions = WebApplicationException.class)
@@ -90,7 +91,6 @@ public class TestHttpRequestSessionContext
                         .put(PRESTO_SOURCE, "testSource")
                         .put(PRESTO_CATALOG, "testCatalog")
                         .put(PRESTO_SCHEMA, "testSchema")
-                        .put(PRESTO_PATH, "testPath")
                         .put(PRESTO_LANGUAGE, "zh-TW")
                         .put(PRESTO_TIME_ZONE, "Asia/Taipei")
                         .put(PRESTO_CLIENT_INFO, "null")

@@ -16,6 +16,8 @@ package com.facebook.presto.spi.block;
 
 import io.airlift.slice.Slice;
 
+import static com.facebook.presto.spi.block.BlockUtil.internalPositionInRange;
+
 public abstract class AbstractSingleRowBlock
         implements Block
 {
@@ -43,24 +45,31 @@ public abstract class AbstractSingleRowBlock
     }
 
     @Override
-    public byte getByte(int position, int offset)
+    public byte getByte(int position)
     {
         checkFieldIndex(position);
-        return getRawFieldBlock(position).getByte(rowIndex, offset);
+        return getRawFieldBlock(position).getByte(rowIndex);
     }
 
     @Override
-    public short getShort(int position, int offset)
+    public short getShort(int position)
     {
         checkFieldIndex(position);
-        return getRawFieldBlock(position).getShort(rowIndex, offset);
+        return getRawFieldBlock(position).getShort(rowIndex);
     }
 
     @Override
-    public int getInt(int position, int offset)
+    public int getInt(int position)
     {
         checkFieldIndex(position);
-        return getRawFieldBlock(position).getInt(rowIndex, offset);
+        return getRawFieldBlock(position).getInt(rowIndex);
+    }
+
+    @Override
+    public long getLong(int position)
+    {
+        checkFieldIndex(position);
+        return getRawFieldBlock(position).getLong(rowIndex);
     }
 
     @Override
@@ -127,10 +136,10 @@ public abstract class AbstractSingleRowBlock
     }
 
     @Override
-    public <T> T getObject(int position, Class<T> clazz)
+    public Block getBlock(int position)
     {
         checkFieldIndex(position);
-        return getRawFieldBlock(position).getObject(rowIndex, clazz);
+        return getRawFieldBlock(position).getBlock(rowIndex);
     }
 
     @Override
@@ -182,5 +191,67 @@ public abstract class AbstractSingleRowBlock
     public Block copyRegion(int position, int length)
     {
         throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public byte getByteUnchecked(int internalPosition)
+    {
+        return getRawFieldBlock(internalPosition).getByte(rowIndex);
+    }
+
+    @Override
+    public short getShortUnchecked(int internalPosition)
+    {
+        return getRawFieldBlock(internalPosition).getShort(rowIndex);
+    }
+
+    @Override
+    public int getIntUnchecked(int internalPosition)
+    {
+        return getRawFieldBlock(internalPosition).getInt(rowIndex);
+    }
+
+    @Override
+    public long getLongUnchecked(int internalPosition)
+    {
+        return getRawFieldBlock(internalPosition).getLong(rowIndex);
+    }
+
+    @Override
+    public long getLongUnchecked(int internalPosition, int offset)
+    {
+        return getRawFieldBlock(internalPosition).getLong(rowIndex, offset);
+    }
+
+    @Override
+    public Slice getSliceUnchecked(int internalPosition, int offset, int length)
+    {
+        return getRawFieldBlock(internalPosition).getSlice(rowIndex, offset, length);
+    }
+
+    @Override
+    public int getSliceLengthUnchecked(int internalPosition)
+    {
+        return getRawFieldBlock(internalPosition).getSliceLength(rowIndex);
+    }
+
+    @Override
+    public Block getBlockUnchecked(int internalPosition)
+    {
+        return getRawFieldBlock(internalPosition).getBlock(rowIndex);
+    }
+
+    @Override
+    public int getOffsetBase()
+    {
+        return 0;
+    }
+
+    @Override
+    public boolean isNullUnchecked(int internalPosition)
+    {
+        assert mayHaveNull() : "no nulls present";
+        assert internalPositionInRange(internalPosition, getOffsetBase(), getPositionCount());
+        return getRawFieldBlock(internalPosition).isNull(rowIndex);
     }
 }

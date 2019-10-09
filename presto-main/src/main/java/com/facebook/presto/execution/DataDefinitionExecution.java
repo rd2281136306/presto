@@ -24,6 +24,7 @@ import com.facebook.presto.security.AccessControl;
 import com.facebook.presto.server.BasicQueryInfo;
 import com.facebook.presto.spi.ErrorCode;
 import com.facebook.presto.spi.QueryId;
+import com.facebook.presto.spi.resourceGroups.QueryType;
 import com.facebook.presto.spi.resourceGroups.ResourceGroupId;
 import com.facebook.presto.sql.planner.Plan;
 import com.facebook.presto.sql.tree.Expression;
@@ -153,6 +154,12 @@ public class DataDefinitionExecution<T extends Statement>
         return stateMachine.getFinalQueryInfo()
                 .map(BasicQueryInfo::new)
                 .orElseGet(() -> stateMachine.getBasicQueryInfo(Optional.empty()));
+    }
+
+    @Override
+    public int getRunningTaskCount()
+    {
+        return stateMachine.getCurrentRunningTaskCount();
     }
 
     @Override
@@ -309,9 +316,10 @@ public class DataDefinitionExecution<T extends Statement>
                 Session session,
                 PreparedQuery preparedQuery,
                 ResourceGroupId resourceGroup,
-                WarningCollector warningCollector)
+                WarningCollector warningCollector,
+                Optional<QueryType> queryType)
         {
-            return createDataDefinitionExecution(query, session, resourceGroup, preparedQuery.getStatement(), preparedQuery.getParameters(), warningCollector);
+            return createDataDefinitionExecution(query, session, resourceGroup, preparedQuery.getStatement(), preparedQuery.getParameters(), warningCollector, queryType);
         }
 
         private <T extends Statement> DataDefinitionExecution<T> createDataDefinitionExecution(
@@ -320,7 +328,8 @@ public class DataDefinitionExecution<T extends Statement>
                 ResourceGroupId resourceGroup,
                 T statement,
                 List<Expression> parameters,
-                WarningCollector warningCollector)
+                WarningCollector warningCollector,
+                Optional<QueryType> queryType)
         {
             @SuppressWarnings("unchecked")
             DataDefinitionTask<T> task = (DataDefinitionTask<T>) tasks.get(statement.getClass());
@@ -331,6 +340,7 @@ public class DataDefinitionExecution<T extends Statement>
                     session,
                     locationFactory.createQueryLocation(session.getQueryId()),
                     resourceGroup,
+                    queryType,
                     task.isTransactionControl(),
                     transactionManager,
                     accessControl,

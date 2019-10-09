@@ -127,7 +127,7 @@ public class TaskResource
     {
         requireNonNull(taskUpdateRequest, "taskUpdateRequest is null");
 
-        Session session = taskUpdateRequest.getSession().toSession(sessionPropertyManager);
+        Session session = taskUpdateRequest.getSession().toSession(sessionPropertyManager, taskUpdateRequest.getExtraCredentials());
         TaskInfo taskInfo = taskManager.updateTask(session,
                 taskId,
                 taskUpdateRequest.getFragment(),
@@ -322,6 +322,16 @@ public class TaskResource
         requireNonNull(bufferId, "bufferId is null");
 
         taskManager.abortTaskResults(taskId, bufferId);
+    }
+
+    @DELETE
+    @Path("{taskId}/remote-source/{remoteSourceTaskId}")
+    public void removeRemoteSource(@PathParam("taskId") TaskId taskId, @PathParam("remoteSourceTaskId") TaskId remoteSourceTaskId)
+    {
+        requireNonNull(taskId, "taskId is null");
+        requireNonNull(remoteSourceTaskId, "remoteSourceTaskId is null");
+
+        taskManager.removeRemoteSource(taskId, remoteSourceTaskId);
     }
 
     @Managed

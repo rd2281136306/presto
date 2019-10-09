@@ -104,7 +104,7 @@ public class Console
                 throw new RuntimeException("both --execute and --file specified");
             }
             try {
-                query = Files.toString(new File(clientOptions.file), UTF_8);
+                query = Files.asCharSource(new File(clientOptions.file), UTF_8).read();
                 hasQuery = true;
             }
             catch (IOException e) {
@@ -332,11 +332,6 @@ public class Console
 
             if (query.getStartedTransactionId() != null) {
                 builder = builder.withTransactionId(query.getStartedTransactionId());
-            }
-
-            // update path if present
-            if (query.getSetPath().isPresent()) {
-                builder = builder.withPath(query.getSetPath().get());
             }
 
             // update session properties if present

@@ -13,6 +13,7 @@
  */
 package com.facebook.presto.raptor.storage;
 
+import com.facebook.presto.orc.metadata.CompressionKind;
 import com.facebook.presto.spi.type.TimeZoneKey;
 import io.airlift.configuration.Config;
 import io.airlift.configuration.ConfigDescription;
@@ -33,6 +34,8 @@ import java.io.File;
 import java.util.TimeZone;
 import java.util.concurrent.TimeUnit;
 
+import static com.facebook.presto.orc.metadata.CompressionKind.ZSTD;
+import static com.facebook.presto.raptor.storage.StorageManagerConfig.OrcOptimizedWriterStage.ENABLED;
 import static io.airlift.units.DataSize.Unit.BYTE;
 import static io.airlift.units.DataSize.Unit.MEGABYTE;
 import static java.lang.Math.max;
@@ -53,6 +56,8 @@ public class StorageManagerConfig
     private DataSize orcStreamBufferSize = new DataSize(8, MEGABYTE);
     private DataSize orcTinyStripeThreshold = new DataSize(8, MEGABYTE);
     private boolean orcLazyReadSmallRanges = true;
+    private OrcOptimizedWriterStage orcOptimizedWriterStage = ENABLED;
+    private CompressionKind orcCompressionKind = ZSTD;
     private int deletionThreads = max(1, getRuntime().availableProcessors() / 2);
     private int recoveryThreads = 10;
     private int organizationThreads = 5;
@@ -65,6 +70,7 @@ public class StorageManagerConfig
     private DataSize maxBufferSize = new DataSize(256, MEGABYTE);
     private int oneSplitPerBucketThreshold;
     private String shardDayBoundaryTimeZone = TimeZoneKey.UTC_KEY.getId();
+    private int maxAllowedFilesPerWriter = Integer.MAX_VALUE;
 
     @NotNull
     public File getDataDirectory()
@@ -158,6 +164,35 @@ public class StorageManagerConfig
     public StorageManagerConfig setOrcLazyReadSmallRanges(boolean orcLazyReadSmallRanges)
     {
         this.orcLazyReadSmallRanges = orcLazyReadSmallRanges;
+        return this;
+    }
+
+    public enum OrcOptimizedWriterStage
+    {
+        ENABLED, ENABLED_AND_VALIDATED
+    }
+
+    public OrcOptimizedWriterStage getOrcOptimizedWriterStage()
+    {
+        return orcOptimizedWriterStage;
+    }
+
+    @Config("storage.orc.optimized-writer-stage")
+    public StorageManagerConfig setOrcOptimizedWriterStage(OrcOptimizedWriterStage orcOptimizedWriterStage)
+    {
+        this.orcOptimizedWriterStage = orcOptimizedWriterStage;
+        return this;
+    }
+
+    public CompressionKind getOrcCompressionKind()
+    {
+        return orcCompressionKind;
+    }
+
+    @Config("storage.orc.compression-kind")
+    public StorageManagerConfig setOrcCompressionKind(CompressionKind orcCompressionKind)
+    {
+        this.orcCompressionKind = orcCompressionKind;
         return this;
     }
 
@@ -331,6 +366,20 @@ public class StorageManagerConfig
     public StorageManagerConfig setMaxBufferSize(DataSize maxBufferSize)
     {
         this.maxBufferSize = maxBufferSize;
+        return this;
+    }
+
+    @Min(1)
+    public int getMaxAllowedFilesPerWriter()
+    {
+        return maxAllowedFilesPerWriter;
+    }
+
+    @Config("storage.max-allowed-files-per-writer")
+    @ConfigDescription("Maximum number of files that can be created per writer for a query. Default value is Integer.MAX_VALUE")
+    public StorageManagerConfig setMaxAllowedFilesPerWriter(int maxAllowedFilesPerWriter)
+    {
+        this.maxAllowedFilesPerWriter = maxAllowedFilesPerWriter;
         return this;
     }
 

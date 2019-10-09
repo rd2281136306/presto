@@ -4,7 +4,7 @@
     <parent>
         <groupId>com.facebook.presto</groupId>
         <artifactId>presto-root</artifactId>
-        <version>0.218-SNAPSHOT</version>
+        <version>0.228-SNAPSHOT</version>
     </parent>
 
     <artifactId>presto-ml</artifactId>
@@ -19,11 +19,6 @@
         <dependency>
             <groupId>com.facebook.presto</groupId>
             <artifactId>presto-array</artifactId>
-        </dependency>
-
-        <dependency>
-            <groupId>com.facebook.presto</groupId>
-            <artifactId>presto-parser</artifactId>
         </dependency>
 
         <dependency>

@@ -34,6 +34,7 @@ import io.airlift.units.Duration;
 import org.weakref.jmx.Managed;
 import org.weakref.jmx.Nested;
 
+import javax.annotation.Nullable;
 import javax.annotation.PreDestroy;
 import javax.inject.Inject;
 import javax.servlet.http.HttpServletRequest;
@@ -68,7 +69,6 @@ import static com.facebook.presto.client.PrestoHeaders.PRESTO_CLEAR_SESSION;
 import static com.facebook.presto.client.PrestoHeaders.PRESTO_CLEAR_TRANSACTION_ID;
 import static com.facebook.presto.client.PrestoHeaders.PRESTO_DEALLOCATED_PREPARE;
 import static com.facebook.presto.client.PrestoHeaders.PRESTO_SET_CATALOG;
-import static com.facebook.presto.client.PrestoHeaders.PRESTO_SET_PATH;
 import static com.facebook.presto.client.PrestoHeaders.PRESTO_SET_ROLE;
 import static com.facebook.presto.client.PrestoHeaders.PRESTO_SET_SCHEMA;
 import static com.facebook.presto.client.PrestoHeaders.PRESTO_SET_SESSION;
@@ -176,13 +176,14 @@ public class StatementResource
     public void getQueryResults(
             @PathParam("queryId") QueryId queryId,
             @PathParam("token") long token,
+            @QueryParam("slug") String slug,
             @QueryParam("maxWait") Duration maxWait,
             @QueryParam("targetResultSize") DataSize targetResultSize,
             @HeaderParam(X_FORWARDED_PROTO) String proto,
             @Context UriInfo uriInfo,
             @Suspended AsyncResponse asyncResponse)
     {
-        Query query = queries.get(queryId);
+        Query query = getQuery(queryId, slug);
         if (query == null) {
             asyncResponse.resume(Response.status(Status.NOT_FOUND).build());
             return;
@@ -192,6 +193,16 @@ public class StatementResource
         }
 
         asyncQueryResults(query, OptionalLong.of(token), maxWait, targetResultSize, uriInfo, proto, asyncResponse);
+    }
+
+    @Nullable
+    private Query getQuery(QueryId queryId, String slug)
+    {
+        Query query = queries.get(queryId);
+        if (query != null && query.isSlugValid(slug)) {
+            return query;
+        }
+        return null;
     }
 
     private void asyncQueryResults(
@@ -221,9 +232,9 @@ public class StatementResource
     {
         ResponseBuilder response = Response.ok(queryResults);
 
+        // add set catalog and schema
         query.getSetCatalog().ifPresent(catalog -> response.header(PRESTO_SET_CATALOG, catalog));
         query.getSetSchema().ifPresent(schema -> response.header(PRESTO_SET_SCHEMA, schema));
-        query.getSetPath().ifPresent(path -> response.header(PRESTO_SET_PATH, path));
 
         // add set session properties
         query.getSetSessionProperties().entrySet()
@@ -264,10 +275,12 @@ public class StatementResource
     @DELETE
     @Path("{queryId}/{token}")
     @Produces(MediaType.APPLICATION_JSON)
-    public Response cancelQuery(@PathParam("queryId") QueryId queryId,
-            @PathParam("token") long token)
+    public Response cancelQuery(
+            @PathParam("queryId") QueryId queryId,
+            @PathParam("token") long token,
+            @QueryParam("slug") String slug)
     {
-        Query query = queries.get(queryId);
+        Query query = getQuery(queryId, slug);
         if (query == null) {
             return Response.status(Status.NOT_FOUND).build();
         }

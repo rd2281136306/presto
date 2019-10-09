@@ -16,7 +16,7 @@ package com.facebook.presto.execution.scheduler;
 
 import com.facebook.presto.execution.Lifespan;
 import com.facebook.presto.spi.connector.ConnectorPartitionHandle;
-import com.facebook.presto.sql.planner.plan.PlanNodeId;
+import com.facebook.presto.spi.plan.PlanNodeId;
 
 import java.util.List;
 
@@ -30,7 +30,9 @@ public interface SourceScheduler
 
     void startLifespan(Lifespan lifespan, ConnectorPartitionHandle partitionHandle);
 
-    void noMoreLifespans();
+    void rewindLifespan(Lifespan lifespan, ConnectorPartitionHandle partitionHandle);
 
-    List<Lifespan> drainCompletedLifespans();
+    List<Lifespan> drainCompletelyScheduledLifespans();
+
+    void notifyAllLifespansFinishedExecution();
 }

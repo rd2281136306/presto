@@ -13,6 +13,7 @@
  */
 package com.facebook.presto.operator.aggregation;
 
+import com.facebook.presto.bytecode.DynamicClassLoader;
 import com.facebook.presto.metadata.BoundVariables;
 import com.facebook.presto.metadata.FunctionManager;
 import com.facebook.presto.metadata.SqlAggregationFunction;
@@ -30,7 +31,6 @@ import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.spi.type.TypeManager;
 import com.facebook.presto.spi.type.TypeSignatureParameter;
 import com.google.common.collect.ImmutableList;
-import io.airlift.bytecode.DynamicClassLoader;
 import io.airlift.stats.QuantileDigest;
 
 import java.lang.invoke.MethodHandle;
@@ -80,13 +80,13 @@ public final class MergeQuantileDigestFunction
         Type valueType = boundVariables.getTypeVariable("T");
         QuantileDigestType outputType = (QuantileDigestType) typeManager.getParameterizedType(StandardTypes.QDIGEST,
                 ImmutableList.of(TypeSignatureParameter.of(valueType.getTypeSignature())));
-        return generateAggregation(valueType, outputType);
+        return generateAggregation(outputType);
     }
 
-    private static InternalAggregationFunction generateAggregation(Type valueType, QuantileDigestType type)
+    private static InternalAggregationFunction generateAggregation(QuantileDigestType type)
     {
         DynamicClassLoader classLoader = new DynamicClassLoader(MapAggregationFunction.class.getClassLoader());
-        QuantileDigestStateSerializer stateSerializer = new QuantileDigestStateSerializer(valueType);
+        QuantileDigestStateSerializer stateSerializer = new QuantileDigestStateSerializer();
         Type intermediateType = stateSerializer.getSerializedType();
 
         AggregationMetadata metadata = new AggregationMetadata(

@@ -20,13 +20,11 @@ import com.facebook.presto.spi.Page;
 import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.type.ArrayType;
 import com.facebook.presto.spi.type.Type;
-import com.facebook.presto.sql.tree.QualifiedName;
 import com.google.common.collect.ImmutableList;
 import org.testng.annotations.Test;
 
 import java.util.Arrays;
 
-import static com.facebook.presto.SessionTestUtils.TEST_SESSION;
 import static com.facebook.presto.block.BlockAssertions.createArrayBigintBlock;
 import static com.facebook.presto.block.BlockAssertions.createDoublesBlock;
 import static com.facebook.presto.block.BlockAssertions.createLongsBlock;
@@ -298,12 +296,12 @@ public class TestMinMaxByNAggregation
     private InternalAggregationFunction getMaxByAggregation(Type... arguments)
     {
         return functionManager.getAggregateFunctionImplementation(
-                functionManager.resolveFunction(TEST_SESSION, QualifiedName.of("max_by"), fromTypes(arguments)));
+                functionManager.lookupFunction("max_by", fromTypes(arguments)));
     }
 
     private InternalAggregationFunction getMinByAggregation(Type... arguments)
     {
         return functionManager.getAggregateFunctionImplementation(
-                functionManager.resolveFunction(TEST_SESSION, QualifiedName.of("min_by"), fromTypes(arguments)));
+                functionManager.lookupFunction("min_by", fromTypes(arguments)));
     }
 }

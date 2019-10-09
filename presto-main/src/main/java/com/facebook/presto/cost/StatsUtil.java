@@ -32,8 +32,9 @@ import com.facebook.presto.sql.InterpretedFunctionInvoker;
 
 import java.util.OptionalDouble;
 
-import static com.facebook.presto.spi.function.OperatorType.CAST;
+import static com.facebook.presto.metadata.CastType.CAST;
 import static java.util.Collections.singletonList;
+import static java.util.Objects.requireNonNull;
 
 final class StatsUtil
 {
@@ -46,6 +47,8 @@ final class StatsUtil
 
     static OptionalDouble toStatsRepresentation(FunctionManager functionManager, ConnectorSession session, Type type, Object value)
     {
+        requireNonNull(value, "value is null");
+
         if (convertibleToDoubleWithCast(type)) {
             InterpretedFunctionInvoker functionInvoker = new InterpretedFunctionInvoker(functionManager);
             FunctionHandle cast = functionManager.lookupCast(CAST, type.getTypeSignature(), DoubleType.DOUBLE.getTypeSignature());

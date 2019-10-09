@@ -24,7 +24,10 @@ import com.facebook.presto.tests.datatype.DataTypeTest;
 import com.facebook.presto.tests.sql.JdbcSqlExecutor;
 import com.facebook.presto.tests.sql.PrestoSqlExecutor;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
+import io.airlift.testing.mysql.MySqlOptions;
 import io.airlift.testing.mysql.TestingMySqlServer;
+import io.airlift.units.Duration;
 import org.testng.annotations.AfterClass;
 import org.testng.annotations.Test;
 
@@ -51,25 +54,28 @@ import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.base.Strings.repeat;
 import static com.google.common.base.Verify.verify;
 import static java.lang.String.format;
-import static java.util.Collections.emptyList;
+import static java.util.concurrent.TimeUnit.SECONDS;
 
 @Test
 public class TestMySqlTypeMapping
         extends AbstractTestQueryFramework
 {
     private static final String CHARACTER_SET_UTF8 = "CHARACTER SET utf8";
+    private static final MySqlOptions MY_SQL_OPTIONS = MySqlOptions.builder()
+            .setCommandTimeout(new Duration(90, SECONDS))
+            .build();
 
     private final TestingMySqlServer mysqlServer;
 
     public TestMySqlTypeMapping()
             throws Exception
     {
-        this(new TestingMySqlServer("testuser", "testpass", "tpch"));
+        this(new TestingMySqlServer("testuser", "testpass", ImmutableList.of("tpch"), MY_SQL_OPTIONS));
     }
 
     private TestMySqlTypeMapping(TestingMySqlServer mysqlServer)
     {
-        super(() -> createMySqlQueryRunner(mysqlServer, emptyList()));
+        super(() -> createMySqlQueryRunner(mysqlServer, ImmutableMap.of(), ImmutableList.of()));
         this.mysqlServer = mysqlServer;
     }
 

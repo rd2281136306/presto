@@ -15,7 +15,6 @@ package com.facebook.presto.event;
 
 import com.facebook.presto.SessionRepresentation;
 import com.facebook.presto.client.NodeVersion;
-import com.facebook.presto.connector.ConnectorId;
 import com.facebook.presto.eventlistener.EventListenerManager;
 import com.facebook.presto.execution.Column;
 import com.facebook.presto.execution.ExecutionFailureInfo;
@@ -23,6 +22,7 @@ import com.facebook.presto.execution.Input;
 import com.facebook.presto.execution.QueryInfo;
 import com.facebook.presto.execution.QueryStats;
 import com.facebook.presto.execution.StageInfo;
+import com.facebook.presto.execution.TaskId;
 import com.facebook.presto.execution.TaskInfo;
 import com.facebook.presto.execution.TaskState;
 import com.facebook.presto.metadata.FunctionManager;
@@ -32,6 +32,7 @@ import com.facebook.presto.operator.OperatorStats;
 import com.facebook.presto.operator.TableFinishInfo;
 import com.facebook.presto.operator.TaskStats;
 import com.facebook.presto.server.BasicQueryInfo;
+import com.facebook.presto.spi.ConnectorId;
 import com.facebook.presto.spi.QueryId;
 import com.facebook.presto.spi.eventlistener.QueryCompletedEvent;
 import com.facebook.presto.spi.eventlistener.QueryContext;
@@ -44,9 +45,14 @@ import com.facebook.presto.spi.eventlistener.QueryOutputMetadata;
 import com.facebook.presto.spi.eventlistener.QueryStatistics;
 import com.facebook.presto.spi.eventlistener.StageCpuDistribution;
 import com.facebook.presto.spi.resourceGroups.ResourceGroupId;
+import com.facebook.presto.sql.planner.plan.PlanFragmentId;
 import com.facebook.presto.transaction.TransactionId;
+import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.annotation.JsonRawValue;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.ImmutableSortedMap;
 import io.airlift.json.JsonCodec;
 import io.airlift.log.Logger;
 import io.airlift.node.NodeInfo;
@@ -63,7 +69,9 @@ import java.util.Optional;
 import java.util.stream.Collectors;
 
 import static com.facebook.presto.execution.QueryState.QUEUED;
+import static com.facebook.presto.execution.StageInfo.getAllStages;
 import static com.facebook.presto.sql.planner.planPrinter.PlanPrinter.textDistributedPlan;
+import static com.google.common.collect.ImmutableList.toImmutableList;
 import static java.lang.Math.max;
 import static java.lang.Math.toIntExact;
 import static java.time.Duration.ofMillis;
@@ -73,6 +81,7 @@ import static java.util.Objects.requireNonNull;
 public class QueryMonitor
 {
     private static final Logger log = Logger.get(QueryMonitor.class);
+    private static final JsonCodec<Map<PlanFragmentId, JsonPlanFragment>> PLAN_MAP_CODEC = JsonCodec.mapJsonCodec(PlanFragmentId.class, JsonPlanFragment.class);
 
     private final JsonCodec<StageInfo> stageInfoCodec;
     private final JsonCodec<OperatorStats> operatorStatsCodec;
@@ -122,6 +131,7 @@ public class QueryMonitor
                                 QUEUED.toString(),
                                 queryInfo.getSelf(),
                                 Optional.empty(),
+                                Optional.empty(),
                                 Optional.empty())));
     }
 
@@ -135,13 +145,15 @@ public class QueryMonitor
                         queryInfo.getState().toString(),
                         queryInfo.getSelf(),
                         Optional.empty(),
+                        Optional.empty(),
                         Optional.empty()),
                 new QueryStatistics(
                         ofMillis(0),
                         ofMillis(0),
                         ofMillis(0),
                         Optional.empty(),
-                        Optional.empty(),
+                        0,
+                        0,
                         0,
                         0,
                         0,
@@ -162,6 +174,8 @@ public class QueryMonitor
                 new QueryIOMetadata(ImmutableList.of(), Optional.empty()),
                 createQueryFailureInfo(failure, Optional.empty()),
                 ImmutableList.of(),
+                queryInfo.getQueryType(),
+                ImmutableList.of(),
                 ofEpochMilli(queryInfo.getQueryStats().getCreateTime().getMillis()),
                 ofEpochMilli(queryInfo.getQueryStats().getCreateTime().getMillis()),
                 ofEpochMilli(queryInfo.getQueryStats().getEndTime().getMillis())));
@@ -180,6 +194,10 @@ public class QueryMonitor
                         getQueryIOMetadata(queryInfo),
                         createQueryFailureInfo(queryInfo.getFailureInfo(), queryInfo.getOutputStage()),
                         queryInfo.getWarnings(),
+                        queryInfo.getQueryType(),
+                        queryInfo.getFailedTasks().orElse(ImmutableList.of()).stream()
+                                .map(TaskId::toString)
+                                .collect(toImmutableList()),
                         ofEpochMilli(queryStats.getCreateTime().getMillis()),
                         ofEpochMilli(queryStats.getExecutionStartTime().getMillis()),
                         ofEpochMilli(queryStats.getEndTime() != null ? queryStats.getEndTime().getMillis() : 0)));
@@ -196,6 +214,7 @@ public class QueryMonitor
                 queryInfo.getState().toString(),
                 queryInfo.getSelf(),
                 createTextQueryPlan(queryInfo),
+                createJsonQueryPlan(queryInfo),
                 queryInfo.getOutputStage().flatMap(stage -> stageInfoCodec.toJsonWithLengthLimit(stage, maxJsonLimit)));
     }
 
@@ -212,7 +231,7 @@ public class QueryMonitor
                 ofMillis(queryStats.getTotalScheduledTime().toMillis()),
                 ofMillis(queryStats.getQueuedTime().toMillis()),
                 Optional.of(ofMillis(queryStats.getAnalysisTime().toMillis())),
-                Optional.of(ofMillis(queryStats.getDistributedPlanningTime().toMillis())),
+                queryStats.getPeakRunningTasks(),
                 queryStats.getPeakUserMemoryReservation().toBytes(),
                 queryStats.getPeakTotalMemoryReservation().toBytes(),
                 queryStats.getPeakTaskUserMemory().toBytes(),
@@ -221,8 +240,9 @@ public class QueryMonitor
                 queryStats.getRawInputPositions(),
                 queryStats.getOutputDataSize().toBytes(),
                 queryStats.getOutputPositions(),
-                queryStats.getLogicalWrittenDataSize().toBytes(),
-                queryStats.getWrittenPositions(),
+                queryStats.getWrittenOutputLogicalDataSize().toBytes(),
+                queryStats.getWrittenOutputPositions(),
+                queryStats.getWrittenIntermediatePhysicalDataSize().toBytes(),
                 queryStats.getCumulativeUserMemory(),
                 queryStats.getStageGcStatistics(),
                 queryStats.getCompletedDrivers(),
@@ -240,7 +260,6 @@ public class QueryMonitor
                 session.getUserAgent(),
                 session.getClientInfo(),
                 session.getClientTags(),
-                session.getClientCapabilities(),
                 session.getSource(),
                 session.getCatalog(),
                 session.getSchema(),
@@ -271,6 +290,26 @@ public class QueryMonitor
         return Optional.empty();
     }
 
+    private Optional<String> createJsonQueryPlan(QueryInfo queryInfo)
+    {
+        try {
+            if (queryInfo.getOutputStage().isPresent()) {
+                ImmutableSortedMap.Builder<PlanFragmentId, JsonPlanFragment> fragmentJsonMap = ImmutableSortedMap.naturalOrder();
+                for (StageInfo stage : getAllStages(queryInfo.getOutputStage())) {
+                    PlanFragmentId fragmentId = stage.getPlan().get().getId();
+                    JsonPlanFragment jsonPlanFragment = new JsonPlanFragment(stage.getPlan().get().getJsonRepresentation().get());
+                    fragmentJsonMap.put(fragmentId, jsonPlanFragment);
+                }
+                return Optional.of(PLAN_MAP_CODEC.toJson(fragmentJsonMap.build()));
+            }
+        }
+        catch (Exception e) {
+            // Don't fail to create event if the plan can not be created
+            log.warn(e, "Error creating json plan for query %s: %s", queryInfo.getQueryId(), e);
+        }
+        return Optional.empty();
+    }
+
     private static QueryIOMetadata getQueryIOMetadata(QueryInfo queryInfo)
     {
         ImmutableList.Builder<QueryInputMetadata> inputs = ImmutableList.builder();
@@ -281,7 +320,8 @@ public class QueryMonitor
                     input.getTable(),
                     input.getColumns().stream()
                             .map(Column::getName).collect(Collectors.toList()),
-                    input.getConnectorInfo()));
+                    input.getConnectorInfo(),
+                    input.getStatistics()));
         }
 
         Optional<QueryOutputMetadata> output = Optional.empty();
@@ -328,7 +368,7 @@ public class QueryMonitor
                 return task;
             }
         }
-        return stageInfo.getTasks().stream()
+        return stageInfo.getLatestAttemptExecutionInfo().getTasks().stream()
                 .filter(taskInfo -> taskInfo.getTaskStatus().getState() == TaskState.FAILED)
                 .findFirst();
     }
@@ -367,7 +407,7 @@ public class QueryMonitor
             // planning duration -- start to end of planning
             long planning = queryStats.getTotalPlanningTime().toMillis();
 
-            List<StageInfo> stages = StageInfo.getAllStages(queryInfo.getOutputStage());
+            List<StageInfo> stages = getAllStages(queryInfo.getOutputStage());
             // long lastSchedulingCompletion = 0;
             long firstTaskStartTime = queryEndTime.getMillis();
             long lastTaskStartTime = queryStartTime.getMillis() + planning;
@@ -378,7 +418,7 @@ public class QueryMonitor
                     continue;
                 }
 
-                for (TaskInfo taskInfo : stage.getTasks()) {
+                for (TaskInfo taskInfo : stage.getLatestAttemptExecutionInfo().getTasks()) {
                     TaskStats taskStats = taskInfo.getStats();
 
                     DateTime firstStartTime = taskStats.getFirstStartTime();
@@ -490,7 +530,7 @@ public class QueryMonitor
     {
         Distribution cpuDistribution = new Distribution();
 
-        for (TaskInfo taskInfo : stageInfo.getTasks()) {
+        for (TaskInfo taskInfo : stageInfo.getLatestAttemptExecutionInfo().getTasks()) {
             cpuDistribution.add(taskInfo.getStats().getTotalCpuTime().toMillis());
         }
 
@@ -498,7 +538,7 @@ public class QueryMonitor
 
         return new StageCpuDistribution(
                 stageInfo.getStageId().getId(),
-                stageInfo.getTasks().size(),
+                stageInfo.getLatestAttemptExecutionInfo().getTasks().size(),
                 snapshot.getP25(),
                 snapshot.getP50(),
                 snapshot.getP75(),
@@ -509,5 +549,23 @@ public class QueryMonitor
                 snapshot.getMax(),
                 (long) snapshot.getTotal(),
                 snapshot.getTotal() / snapshot.getCount());
+    }
+
+    public static class JsonPlanFragment
+    {
+        @JsonRawValue
+        private final String plan;
+
+        @JsonCreator
+        public JsonPlanFragment(String plan)
+        {
+            this.plan = plan;
+        }
+
+        @JsonProperty
+        public String getPlan()
+        {
+            return this.plan;
+        }
     }
 }

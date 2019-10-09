@@ -34,26 +34,31 @@ import com.facebook.presto.server.TaskUpdateRequest;
 import com.facebook.presto.server.smile.BaseResponse;
 import com.facebook.presto.server.smile.Codec;
 import com.facebook.presto.server.smile.SmileCodec;
+import com.facebook.presto.spi.PrestoException;
+import com.facebook.presto.spi.plan.PlanNode;
+import com.facebook.presto.spi.plan.PlanNodeId;
 import com.facebook.presto.sql.planner.PlanFragment;
-import com.facebook.presto.sql.planner.plan.PlanNode;
-import com.facebook.presto.sql.planner.plan.PlanNodeId;
 import com.google.common.base.Ticker;
 import com.google.common.collect.HashMultimap;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Multimap;
 import com.google.common.collect.SetMultimap;
 import com.google.common.util.concurrent.FutureCallback;
 import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
+import com.google.common.util.concurrent.SettableFuture;
 import io.airlift.concurrent.SetThreadName;
 import io.airlift.http.client.HttpClient;
 import io.airlift.http.client.HttpUriBuilder;
 import io.airlift.http.client.Request;
 import io.airlift.http.client.ResponseHandler;
+import io.airlift.http.client.StatusResponseHandler.StatusResponse;
 import io.airlift.log.Logger;
 import io.airlift.units.Duration;
 import org.joda.time.DateTime;
 
+import javax.annotation.Nullable;
 import javax.annotation.concurrent.GuardedBy;
 
 import java.net.URI;
@@ -85,16 +90,23 @@ import static com.facebook.presto.server.remotetask.RequestErrorTracker.logError
 import static com.facebook.presto.server.smile.AdaptingJsonResponseHandler.createAdaptingJsonResponseHandler;
 import static com.facebook.presto.server.smile.FullSmileResponseHandler.createFullSmileResponseHandler;
 import static com.facebook.presto.server.smile.JsonCodecWrapper.unwrapJsonCodec;
+import static com.facebook.presto.spi.StandardErrorCode.GENERIC_INTERNAL_ERROR;
 import static com.facebook.presto.util.Failures.toFailure;
 import static com.google.common.base.MoreObjects.toStringHelper;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.collect.ImmutableList.toImmutableList;
+import static com.google.common.collect.ImmutableSet.toImmutableSet;
+import static com.google.common.util.concurrent.Futures.addCallback;
 import static com.google.common.util.concurrent.Futures.immediateFuture;
+import static com.google.common.util.concurrent.MoreExecutors.directExecutor;
+import static io.airlift.http.client.HttpStatus.NO_CONTENT;
+import static io.airlift.http.client.HttpStatus.OK;
 import static io.airlift.http.client.HttpUriBuilder.uriBuilderFrom;
 import static io.airlift.http.client.Request.Builder.prepareDelete;
 import static io.airlift.http.client.Request.Builder.preparePost;
 import static io.airlift.http.client.StaticBodyGenerator.createStaticBodyGenerator;
+import static io.airlift.http.client.StatusResponseHandler.createStatusResponseHandler;
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.concurrent.TimeUnit.NANOSECONDS;
@@ -106,14 +118,19 @@ public final class HttpRemoteTask
     private static final Logger log = Logger.get(HttpRemoteTask.class);
 
     private final TaskId taskId;
+    private final URI taskLocation;
 
     private final Session session;
     private final String nodeId;
     private final PlanFragment planFragment;
     private final OptionalInt totalPartitions;
 
+    private final Set<PlanNodeId> tableScanPlanNodeIds;
+    private final Set<PlanNodeId> remoteSourcePlanNodeIds;
+
     private final AtomicLong nextSplitId = new AtomicLong();
 
+    private final Duration maxErrorDuration;
     private final RemoteTaskStats stats;
     private final TaskInfoFetcher taskInfoFetcher;
     private final ContinuousTaskStatusFetcher taskStatusFetcher;
@@ -161,7 +178,8 @@ public final class HttpRemoteTask
 
     private final boolean isBinaryTransportEnabled;
 
-    public HttpRemoteTask(Session session,
+    public HttpRemoteTask(
+            Session session,
             TaskId taskId,
             String nodeId,
             URI location,
@@ -175,6 +193,7 @@ public final class HttpRemoteTask
             ScheduledExecutorService errorScheduledExecutor,
             Duration maxErrorDuration,
             Duration taskStatusRefreshMaxWait,
+            Duration taskInfoRefreshMaxWait,
             Duration taskInfoUpdateInterval,
             boolean summarizeTaskInfo,
             Codec<TaskStatus> taskStatusCodec,
@@ -197,10 +216,13 @@ public final class HttpRemoteTask
         requireNonNull(taskInfoCodec, "taskInfoCodec is null");
         requireNonNull(taskUpdateRequestCodec, "taskUpdateRequestCodec is null");
         requireNonNull(partitionedSplitCountTracker, "partitionedSplitCountTracker is null");
+        requireNonNull(maxErrorDuration, "maxErrorDuration is null");
         requireNonNull(stats, "stats is null");
+        requireNonNull(taskInfoRefreshMaxWait, "taskInfoRefreshMaxWait is null");
 
         try (SetThreadName ignored = new SetThreadName("HttpRemoteTask-%s", taskId)) {
             this.taskId = taskId;
+            this.taskLocation = location;
             this.session = session;
             this.nodeId = nodeId;
             this.planFragment = planFragment;
@@ -214,14 +236,20 @@ public final class HttpRemoteTask
             this.taskUpdateRequestCodec = taskUpdateRequestCodec;
             this.updateErrorTracker = new RequestErrorTracker(taskId, location, maxErrorDuration, errorScheduledExecutor, "updating task");
             this.partitionedSplitCountTracker = requireNonNull(partitionedSplitCountTracker, "partitionedSplitCountTracker is null");
+            this.maxErrorDuration = maxErrorDuration;
             this.stats = stats;
             this.isBinaryTransportEnabled = isBinaryTransportEnabled;
+
+            this.tableScanPlanNodeIds = ImmutableSet.copyOf(planFragment.getTableScanSchedulingOrder());
+            this.remoteSourcePlanNodeIds = planFragment.getRemoteSourceNodes().stream()
+                    .map(PlanNode::getId)
+                    .collect(toImmutableSet());
 
             for (Entry<PlanNodeId, Split> entry : requireNonNull(initialSplits, "initialSplits is null").entries()) {
                 ScheduledSplit scheduledSplit = new ScheduledSplit(nextSplitId.getAndIncrement(), entry.getKey(), entry.getValue());
                 pendingSplits.put(entry.getKey(), scheduledSplit);
             }
-            pendingSourceSplitCount = planFragment.getPartitionedSources().stream()
+            pendingSourceSplitCount = planFragment.getTableScanSchedulingOrder().stream()
                     .filter(initialSplits::containsKey)
                     .mapToInt(partitionedSource -> initialSplits.get(partitionedSource).size())
                     .sum();
@@ -250,6 +278,7 @@ public final class HttpRemoteTask
                     initialTask,
                     httpClient,
                     taskInfoUpdateInterval,
+                    taskInfoRefreshMaxWait,
                     taskInfoCodec,
                     maxErrorDuration,
                     summarizeTaskInfo,
@@ -333,7 +362,7 @@ public final class HttpRemoteTask
                     added++;
                 }
             }
-            if (planFragment.isPartitionedSources(sourceId)) {
+            if (tableScanPlanNodeIds.contains(sourceId)) {
                 pendingSourceSplitCount += added;
                 partitionedSplitCountTracker.setPartitionedSplitCount(getPartitionedSplitCount());
             }
@@ -380,6 +409,77 @@ public final class HttpRemoteTask
             needsUpdate.set(true);
             scheduleUpdate();
         }
+    }
+
+    @Override
+    public ListenableFuture<?> removeRemoteSource(TaskId remoteSourceTaskId)
+    {
+        URI remoteSourceUri = uriBuilderFrom(taskLocation)
+                .appendPath("remote-source")
+                .appendPath(remoteSourceTaskId.toString())
+                .build();
+
+        Request request = prepareDelete()
+                .setUri(remoteSourceUri)
+                .build();
+        RequestErrorTracker errorTracker = new RequestErrorTracker(
+                taskId,
+                remoteSourceUri,
+                maxErrorDuration,
+                errorScheduledExecutor,
+                "Remove exchange remote source");
+
+        SettableFuture<?> future = SettableFuture.create();
+        doRemoveRemoteSource(errorTracker, request, future);
+        return future;
+    }
+
+    /// This method may call itself recursively when retrying for failures
+    private void doRemoveRemoteSource(RequestErrorTracker errorTracker, Request request, SettableFuture<?> future)
+    {
+        errorTracker.startRequest();
+
+        FutureCallback<StatusResponse> callback = new FutureCallback<StatusResponse>() {
+            @Override
+            public void onSuccess(@Nullable StatusResponse response)
+            {
+                if (response == null) {
+                    throw new PrestoException(GENERIC_INTERNAL_ERROR, "Request failed with null response");
+                }
+                if (response.getStatusCode() != OK.code() && response.getStatusCode() != NO_CONTENT.code()) {
+                    throw new PrestoException(GENERIC_INTERNAL_ERROR, "Request failed with HTTP status " + response.getStatusCode());
+                }
+                future.set(null);
+            }
+
+            @Override
+            public void onFailure(Throwable failedReason)
+            {
+                if (failedReason instanceof RejectedExecutionException && httpClient.isClosed()) {
+                    log.error("Unable to destroy exchange source at %s. HTTP client is closed", request.getUri());
+                    future.setException(failedReason);
+                    return;
+                }
+                // record failure
+                try {
+                    errorTracker.requestFailed(failedReason);
+                }
+                catch (PrestoException e) {
+                    future.setException(e);
+                    return;
+                }
+                // if throttled due to error, asynchronously wait for timeout and try again
+                ListenableFuture<?> errorRateLimit = errorTracker.acquireRequestPermit();
+                if (errorRateLimit.isDone()) {
+                    doRemoveRemoteSource(errorTracker, request, future);
+                }
+                else {
+                    errorRateLimit.addListener(() -> doRemoveRemoteSource(errorTracker, request, future), errorScheduledExecutor);
+                }
+            }
+        };
+
+        addCallback(httpClient.executeAsync(request, createStatusResponseHandler()), callback, directExecutor());
     }
 
     @Override
@@ -468,7 +568,7 @@ public final class HttpRemoteTask
             for (Lifespan lifespan : source.getNoMoreSplitsForLifespan()) {
                 pendingNoMoreSplitsForLifespan.remove(planNodeId, lifespan);
             }
-            if (planFragment.isPartitionedSources(planNodeId)) {
+            if (tableScanPlanNodeIds.contains(planNodeId)) {
                 pendingSourceSplitCount -= removed;
             }
         }
@@ -513,6 +613,7 @@ public final class HttpRemoteTask
         Optional<PlanFragment> fragment = sendPlan.get() ? Optional.of(planFragment) : Optional.empty();
         TaskUpdateRequest updateRequest = new TaskUpdateRequest(
                 session.toSessionRepresentation(),
+                session.getIdentity().getExtraCredentials(),
                 fragment,
                 sources,
                 outputBuffers.get(),
@@ -551,9 +652,7 @@ public final class HttpRemoteTask
 
     private synchronized List<TaskSource> getSources()
     {
-        return Stream.concat(planFragment.getPartitionedSourceNodes().stream(), planFragment.getRemoteSourceNodes().stream())
-                .filter(Objects::nonNull)
-                .map(PlanNode::getId)
+        return Stream.concat(tableScanPlanNodeIds.stream(), remoteSourcePlanNodeIds.stream())
                 .map(this::getSource)
                 .filter(Objects::nonNull)
                 .collect(toImmutableList());
@@ -636,6 +735,10 @@ public final class HttpRemoteTask
         checkState(status.getState().isDone(), "cannot abort task with an incomplete status");
 
         try (SetThreadName ignored = new SetThreadName("HttpRemoteTask-%s", taskId)) {
+            // With recoverable grouped execution, failed task does not necessarily fail the whole query.
+            // Not updating task info makes query unable to finish in tests because failed task is stuck in RUNNING state.
+            // TODO: Investigate why this only happens in TestHiveRecoverableGroupedExecution when worker is closed, but not in production test via cli.
+            taskInfoFetcher.updateTaskInfo(getTaskInfo().withTaskStatus(status));
             taskStatusFetcher.updateTaskStatus(status);
 
             // send abort to task

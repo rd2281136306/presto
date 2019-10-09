@@ -24,7 +24,6 @@ import com.facebook.presto.operator.scalar.ScalarFunctionImplementation.ScalarIm
 import com.facebook.presto.spi.function.Signature;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.spi.type.TypeManager;
-import com.facebook.presto.spi.type.TypeSignature;
 import com.facebook.presto.util.Reflection;
 import com.google.common.collect.ImmutableList;
 import com.google.common.primitives.Primitives;
@@ -38,7 +37,6 @@ import java.util.Optional;
 import static com.facebook.presto.metadata.SignatureBinder.applyBoundVariables;
 import static com.facebook.presto.operator.scalar.ScalarFunctionImplementation.NullConvention.BLOCK_AND_POSITION;
 import static com.facebook.presto.operator.scalar.ScalarFunctionImplementation.NullConvention.USE_NULL_FLAG;
-import static com.facebook.presto.type.TypeUtils.resolveTypes;
 import static com.google.common.base.Preconditions.checkState;
 import static java.util.Collections.emptyList;
 import static java.util.Objects.requireNonNull;
@@ -49,6 +47,7 @@ class PolymorphicScalarFunction
     private final String description;
     private final boolean hidden;
     private final boolean deterministic;
+    private final boolean calledOnNullInput;
     private final List<PolymorphicScalarFunctionChoice> choices;
 
     PolymorphicScalarFunction(
@@ -56,6 +55,7 @@ class PolymorphicScalarFunction
             String description,
             boolean hidden,
             boolean deterministic,
+            boolean calledOnNullInput,
             List<PolymorphicScalarFunctionChoice> choices)
     {
         super(signature);
@@ -63,6 +63,7 @@ class PolymorphicScalarFunction
         this.description = description;
         this.hidden = hidden;
         this.deterministic = deterministic;
+        this.calledOnNullInput = calledOnNullInput;
         this.choices = requireNonNull(choices, "choices is null");
     }
 
@@ -76,6 +77,12 @@ class PolymorphicScalarFunction
     public boolean isDeterministic()
     {
         return deterministic;
+    }
+
+    @Override
+    public boolean isCalledOnNullInput()
+    {
+        return calledOnNullInput;
     }
 
     @Override
@@ -93,7 +100,7 @@ class PolymorphicScalarFunction
             implementationChoices.add(getScalarFunctionImplementationChoice(boundVariables, typeManager, functionManager, choice));
         }
 
-        return new ScalarFunctionImplementation(implementationChoices.build(), deterministic);
+        return new ScalarFunctionImplementation(implementationChoices.build());
     }
 
     private ScalarImplementationChoice getScalarFunctionImplementationChoice(
@@ -102,10 +109,8 @@ class PolymorphicScalarFunction
             FunctionManager functionManager,
             PolymorphicScalarFunctionChoice choice)
     {
-        List<TypeSignature> resolvedParameterTypeSignatures = applyBoundVariables(getSignature().getArgumentTypes(), boundVariables);
-        List<Type> resolvedParameterTypes = resolveTypes(resolvedParameterTypeSignatures, typeManager);
-        TypeSignature resolvedReturnTypeSignature = applyBoundVariables(getSignature().getReturnType(), boundVariables);
-        Type resolvedReturnType = typeManager.getType(resolvedReturnTypeSignature);
+        List<Type> resolvedParameterTypes = applyBoundVariables(typeManager, getSignature().getArgumentTypes(), boundVariables);
+        Type resolvedReturnType = applyBoundVariables(typeManager, getSignature().getReturnType(), boundVariables);
         SpecializeContext context = new SpecializeContext(boundVariables, resolvedParameterTypes, resolvedReturnType, typeManager, functionManager);
         Optional<MethodAndNativeContainerTypes> matchingMethod = Optional.empty();
 
@@ -114,7 +119,7 @@ class PolymorphicScalarFunction
             for (MethodAndNativeContainerTypes candidateMethod : candidateMethodsGroup.getMethods()) {
                 if (matchesParameterAndReturnTypes(candidateMethod, resolvedParameterTypes, resolvedReturnType, choice.getArgumentProperties(), choice.isNullableResult())) {
                     if (matchingMethod.isPresent()) {
-                        throw new IllegalStateException("two matching methods (" + matchingMethod.get().getMethod().getName() + " and " + candidateMethod.getMethod().getName() + ") for parameter types " + resolvedParameterTypeSignatures);
+                        throw new IllegalStateException("two matching methods (" + matchingMethod.get().getMethod().getName() + " and " + candidateMethod.getMethod().getName() + ") for parameter types " + resolvedParameterTypes);
                     }
 
                     matchingMethod = Optional.of(candidateMethod);

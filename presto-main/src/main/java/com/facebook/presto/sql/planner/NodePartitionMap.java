@@ -15,8 +15,8 @@ package com.facebook.presto.sql.planner;
 
 import com.facebook.presto.execution.scheduler.BucketNodeMap;
 import com.facebook.presto.execution.scheduler.FixedBucketNodeMap;
+import com.facebook.presto.metadata.InternalNode;
 import com.facebook.presto.metadata.Split;
-import com.facebook.presto.spi.Node;
 import com.google.common.collect.ImmutableList;
 
 import java.util.List;
@@ -27,33 +27,35 @@ import static java.util.Objects.requireNonNull;
 
 // When the probe side of join is bucketed but builder side is not,
 // bucket to partition mapping has to be populated to builder side remote fragment.
-// NodePartitionMap is required in this case and cannot be replaced by BucketNodeMap.
+// NodePartitionMap is required in this case and cannot be simply replaced by BucketNodeMap.
 //
 //      Join
 //      /  \
 //   Scan  Remote
 //
+// TODO: Investigate if we can use FixedBucketNodeMap and a node to taskId map to replace NodePartitionMap
+//  in the above case, as the co-existence of BucketNodeMap and NodePartitionMap is confusing.
 public class NodePartitionMap
 {
-    private final List<Node> partitionToNode;
+    private final List<InternalNode> partitionToNode;
     private final int[] bucketToPartition;
     private final ToIntFunction<Split> splitToBucket;
 
-    public NodePartitionMap(List<Node> partitionToNode, ToIntFunction<Split> splitToBucket)
+    public NodePartitionMap(List<InternalNode> partitionToNode, ToIntFunction<Split> splitToBucket)
     {
         this.partitionToNode = ImmutableList.copyOf(requireNonNull(partitionToNode, "partitionToNode is null"));
         this.bucketToPartition = IntStream.range(0, partitionToNode.size()).toArray();
         this.splitToBucket = requireNonNull(splitToBucket, "splitToBucket is null");
     }
 
-    public NodePartitionMap(List<Node> partitionToNode, int[] bucketToPartition, ToIntFunction<Split> splitToBucket)
+    public NodePartitionMap(List<InternalNode> partitionToNode, int[] bucketToPartition, ToIntFunction<Split> splitToBucket)
     {
         this.bucketToPartition = requireNonNull(bucketToPartition, "bucketToPartition is null");
         this.partitionToNode = ImmutableList.copyOf(requireNonNull(partitionToNode, "partitionToNode is null"));
         this.splitToBucket = requireNonNull(splitToBucket, "splitToBucket is null");
     }
 
-    public List<Node> getPartitionToNode()
+    public List<InternalNode> getPartitionToNode()
     {
         return partitionToNode;
     }
@@ -63,7 +65,7 @@ public class NodePartitionMap
         return bucketToPartition;
     }
 
-    public Node getNode(Split split)
+    public InternalNode getNode(Split split)
     {
         int bucket = splitToBucket.applyAsInt(split);
         int partition = bucketToPartition[bucket];
@@ -72,7 +74,7 @@ public class NodePartitionMap
 
     public BucketNodeMap asBucketNodeMap()
     {
-        ImmutableList.Builder<Node> bucketToNode = ImmutableList.builder();
+        ImmutableList.Builder<InternalNode> bucketToNode = ImmutableList.builder();
         for (int partition : bucketToPartition) {
             bucketToNode.add(partitionToNode.get(partition));
         }

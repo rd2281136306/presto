@@ -17,10 +17,10 @@ import com.facebook.presto.RowPagesBuilder;
 import com.facebook.presto.metadata.MetadataManager;
 import com.facebook.presto.operator.MarkDistinctOperator.MarkDistinctOperatorFactory;
 import com.facebook.presto.spi.Page;
+import com.facebook.presto.spi.plan.PlanNodeId;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.sql.analyzer.FeaturesConfig;
 import com.facebook.presto.sql.gen.JoinCompiler;
-import com.facebook.presto.sql.planner.plan.PlanNodeId;
 import com.facebook.presto.testing.MaterializedResult;
 import com.google.common.collect.ImmutableList;
 import com.google.common.primitives.Ints;
@@ -122,7 +122,7 @@ public class TestMarkDistinctOperator
         for (Page page : result.getOutput()) {
             assertEquals(page.getChannelCount(), 3);
             for (int i = 0; i < page.getPositionCount(); i++) {
-                assertEquals(page.getBlock(2).getByte(i, 0), 1);
+                assertEquals(page.getBlock(2).getByte(i), 1);
                 count++;
             }
         }

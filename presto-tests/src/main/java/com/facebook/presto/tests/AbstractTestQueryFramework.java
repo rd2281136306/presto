@@ -30,6 +30,8 @@ import com.facebook.presto.sql.parser.SqlParser;
 import com.facebook.presto.sql.planner.Plan;
 import com.facebook.presto.sql.planner.PlanFragmenter;
 import com.facebook.presto.sql.planner.PlanOptimizers;
+import com.facebook.presto.sql.planner.assertions.PlanAssert;
+import com.facebook.presto.sql.planner.assertions.PlanMatchPattern;
 import com.facebook.presto.sql.planner.optimizations.PlanOptimizer;
 import com.facebook.presto.sql.tree.ExplainType;
 import com.facebook.presto.testing.MaterializedResult;
@@ -139,6 +141,12 @@ public abstract class AbstractTestQueryFramework
     protected void assertQuery(Session session, @Language("SQL") String actual, @Language("SQL") String expected)
     {
         QueryAssertions.assertQuery(queryRunner, session, actual, h2QueryRunner, expected, false, false);
+    }
+
+    protected void assertQuery(Session session, @Language("SQL") String sql, Consumer<Plan> planAssertion)
+    {
+        checkArgument(queryRunner instanceof DistributedQueryRunner, "pattern assertion is only supported for DistributedQueryRunner");
+        QueryAssertions.assertQuery(queryRunner, session, sql, h2QueryRunner, sql, false, false, planAssertion);
     }
 
     protected void assertQuery(Session session, @Language("SQL") String actual, @Language("SQL") String expected, Consumer<Plan> planAssertion)
@@ -316,7 +324,7 @@ public abstract class AbstractTestQueryFramework
         return transaction(queryRunner.getTransactionManager(), queryRunner.getAccessControl())
                 .singleStatement()
                 .execute(queryRunner.getDefaultSession(), session -> {
-                    return explainer.getPlan(session, sqlParser.createStatement(query, createParsingOptions(session)), planType, emptyList(), WarningCollector.NOOP);
+                    return explainer.getPlan(session, sqlParser.createStatement(query, createParsingOptions(session)), planType, emptyList(), false, WarningCollector.NOOP);
                 });
     }
 
@@ -327,6 +335,29 @@ public abstract class AbstractTestQueryFramework
                 .singleStatement()
                 .execute(queryRunner.getDefaultSession(), session -> {
                     return explainer.getGraphvizPlan(session, sqlParser.createStatement(query, createParsingOptions(session)), planType, emptyList(), WarningCollector.NOOP);
+                });
+    }
+
+    protected void assertPlan(@Language("SQL") String query, PlanMatchPattern pattern)
+    {
+        assertPlan(queryRunner.getDefaultSession(), query, pattern);
+    }
+
+    protected void assertPlan(Session session, @Language("SQL") String query, PlanMatchPattern pattern)
+    {
+        assertPlan(session, query, pattern, plan -> {});
+    }
+
+    protected void assertPlan(Session session, @Language("SQL") String query, PlanMatchPattern pattern, Consumer<Plan> planValidator)
+    {
+        QueryExplainer explainer = getQueryExplainer();
+        transaction(queryRunner.getTransactionManager(), queryRunner.getAccessControl())
+                .singleStatement()
+                .execute(session, transactionSession -> {
+                    Plan actualPlan = explainer.getLogicalPlan(transactionSession, sqlParser.createStatement(query, createParsingOptions(transactionSession)), emptyList(), WarningCollector.NOOP);
+                    PlanAssert.assertPlan(transactionSession, queryRunner.getMetadata(), queryRunner.getStatsCalculator(), actualPlan, pattern);
+                    planValidator.accept(actualPlan);
+                    return null;
                 });
     }
 
@@ -344,6 +375,7 @@ public abstract class AbstractTestQueryFramework
                 forceSingleNode,
                 new MBeanExporter(new TestingMBeanServer()),
                 queryRunner.getSplitManager(),
+                queryRunner.getPlanOptimizerManager(),
                 queryRunner.getPageSourceManager(),
                 queryRunner.getStatsCalculator(),
                 costCalculator,

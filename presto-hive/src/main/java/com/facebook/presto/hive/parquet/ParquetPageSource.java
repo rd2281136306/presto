@@ -35,7 +35,6 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.util.List;
 import java.util.Optional;
-import java.util.Properties;
 
 import static com.facebook.presto.hive.HiveColumnHandle.ColumnType.REGULAR;
 import static com.facebook.presto.hive.HiveErrorCode.HIVE_BAD_DATA;
@@ -63,6 +62,7 @@ public class ParquetPageSource
     private final int[] hiveColumnIndexes;
 
     private int batchId;
+    private long completedPositions;
     private boolean closed;
     private final boolean useParquetColumnNames;
 
@@ -71,12 +71,10 @@ public class ParquetPageSource
             MessageType fileSchema,
             MessageColumnIO messageColumnIO,
             TypeManager typeManager,
-            Properties splitSchema,
             List<HiveColumnHandle> columns,
             TupleDomain<HiveColumnHandle> effectivePredicate,
             boolean useParquetColumnNames)
     {
-        requireNonNull(splitSchema, "splitSchema is null");
         requireNonNull(columns, "columns is null");
         requireNonNull(effectivePredicate, "effectivePredicate is null");
         this.parquetReader = requireNonNull(parquetReader, "parquetReader is null");
@@ -101,13 +99,13 @@ public class ParquetPageSource
             typesBuilder.add(type);
             hiveColumnIndexes[columnIndex] = column.getHiveColumnIndex();
 
-            if (getParquetType(column, fileSchema, useParquetColumnNames) == null) {
-                constantBlocks[columnIndex] = RunLengthEncodedBlock.create(type, null, MAX_VECTOR_LENGTH);
-                fieldsBuilder.add(Optional.empty());
-            }
-            else {
+            if (getParquetType(type, fileSchema, useParquetColumnNames, column).isPresent()) {
                 String columnName = useParquetColumnNames ? name : fileSchema.getFields().get(column.getHiveColumnIndex()).getName();
                 fieldsBuilder.add(constructField(type, lookupColumnByName(messageColumnIO, columnName)));
+            }
+            else {
+                constantBlocks[columnIndex] = RunLengthEncodedBlock.create(type, null, MAX_VECTOR_LENGTH);
+                fieldsBuilder.add(Optional.empty());
             }
         }
         types = typesBuilder.build();
@@ -119,6 +117,12 @@ public class ParquetPageSource
     public long getCompletedBytes()
     {
         return parquetReader.getDataSource().getReadBytes();
+    }
+
+    @Override
+    public long getCompletedPositions()
+    {
+        return completedPositions;
     }
 
     @Override
@@ -150,6 +154,8 @@ public class ParquetPageSource
                 close();
                 return null;
             }
+
+            completedPositions += batchSize;
 
             Block[] blocks = new Block[hiveColumnIndexes.length];
             for (int fieldId = 0; fieldId < blocks.length; fieldId++) {

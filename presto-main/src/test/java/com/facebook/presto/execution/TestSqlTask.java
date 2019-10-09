@@ -13,6 +13,7 @@
  */
 package com.facebook.presto.execution;
 
+import com.facebook.presto.execution.TestSqlTaskManager.MockExchangeClientSupplier;
 import com.facebook.presto.execution.buffer.BufferResult;
 import com.facebook.presto.execution.buffer.BufferState;
 import com.facebook.presto.execution.buffer.OutputBuffers;
@@ -298,7 +299,7 @@ public class TestSqlTask
 
     public SqlTask createInitialTask()
     {
-        TaskId taskId = new TaskId("query", 0, nextTaskId.incrementAndGet());
+        TaskId taskId = new TaskId("query", 0, 0, nextTaskId.incrementAndGet());
         URI location = URI.create("fake://task/" + taskId);
 
         QueryContext queryContext = new QueryContext(new QueryId("query"),
@@ -319,6 +320,7 @@ public class TestSqlTask
                 "fake",
                 queryContext,
                 sqlTaskExecutionFactory,
+                new MockExchangeClientSupplier(),
                 taskNotificationExecutor,
                 Functions.identity(),
                 new DataSize(32, MEGABYTE),

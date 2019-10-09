@@ -20,6 +20,7 @@ import com.facebook.presto.operator.scalar.ScalarFunctionImplementation.Argument
 import com.facebook.presto.spi.function.FunctionHandle;
 import com.facebook.presto.spi.function.FunctionKind;
 import com.facebook.presto.spi.function.Signature;
+import com.facebook.presto.spi.relation.FullyQualifiedName;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.spi.type.TypeManager;
 import com.google.common.collect.ImmutableList;
@@ -28,7 +29,8 @@ import com.google.common.primitives.Primitives;
 import java.lang.invoke.MethodHandle;
 import java.util.List;
 
-import static com.facebook.presto.spi.function.OperatorType.CAST;
+import static com.facebook.presto.metadata.BuiltInFunctionNamespaceManager.DEFAULT_NAMESPACE;
+import static com.facebook.presto.metadata.CastType.CAST;
 import static com.facebook.presto.spi.function.Signature.typeVariable;
 import static com.facebook.presto.spi.type.TypeSignature.parseTypeSignature;
 import static java.lang.invoke.MethodHandles.catchException;
@@ -40,11 +42,12 @@ public class TryCastFunction
         extends SqlScalarFunction
 {
     public static final TryCastFunction TRY_CAST = new TryCastFunction();
+    public static final String TRY_CAST_NAME = "TRY_CAST";
 
     public TryCastFunction()
     {
         super(new Signature(
-                "TRY_CAST",
+                FullyQualifiedName.of(DEFAULT_NAMESPACE, TRY_CAST_NAME),
                 FunctionKind.SCALAR,
                 ImmutableList.of(typeVariable("F"), typeVariable("T")),
                 ImmutableList.of(),
@@ -91,6 +94,6 @@ public class TryCastFunction
         MethodHandle exceptionHandler = dropArguments(constant(returnType, null), 0, RuntimeException.class);
         tryCastHandle = catchException(coercion, RuntimeException.class, exceptionHandler);
 
-        return new ScalarFunctionImplementation(true, argumentProperties, tryCastHandle, isDeterministic());
+        return new ScalarFunctionImplementation(true, argumentProperties, tryCastHandle);
     }
 }

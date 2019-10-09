@@ -30,6 +30,10 @@ import java.util.Map;
 import java.util.TimeZone;
 import java.util.concurrent.TimeUnit;
 
+import static com.facebook.presto.hive.HiveCompressionCodec.NONE;
+import static com.facebook.presto.hive.HiveCompressionCodec.SNAPPY;
+import static com.facebook.presto.hive.HiveStorageFormat.DWRF;
+import static com.facebook.presto.hive.HiveStorageFormat.ORC;
 import static com.facebook.presto.hive.TestHiveUtil.nonDefaultTimeZone;
 
 public class TestHiveClientConfig
@@ -61,6 +65,7 @@ public class TestHiveClientConfig
                 .setWriterSortBufferSize(new DataSize(64, Unit.MEGABYTE))
                 .setForceLocalScheduling(false)
                 .setMaxConcurrentFileRenames(20)
+                .setMaxConcurrentZeroRowFileCreations(20)
                 .setRecursiveDirWalkerEnabled(false)
                 .setDfsTimeout(new Duration(60, TimeUnit.SECONDS))
                 .setIpcPingInterval(new Duration(10, TimeUnit.SECONDS))
@@ -70,8 +75,8 @@ public class TestHiveClientConfig
                 .setDomainSocketPath(null)
                 .setS3FileSystemType(S3FileSystemType.PRESTO)
                 .setResourceConfigFiles("")
-                .setHiveStorageFormat(HiveStorageFormat.ORC)
-                .setHiveCompressionCodec(HiveCompressionCodec.GZIP)
+                .setHiveStorageFormat(ORC)
+                .setCompressionCodec(HiveCompressionCodec.GZIP)
                 .setRespectTableFormat(true)
                 .setImmutablePartitions(false)
                 .setSortedWritingEnabled(true)
@@ -81,6 +86,7 @@ public class TestHiveClientConfig
                 .setTextMaxLineLength(new DataSize(100, Unit.MEGABYTE))
                 .setUseParquetColumnNames(false)
                 .setFailOnCorruptedParquetStatistics(true)
+                .setParquetMaxReadBlockSize(new DataSize(16, Unit.MEGABYTE))
                 .setUseOrcColumnNames(false)
                 .setAssumeCanonicalPartitionKeys(false)
                 .setOrcBloomFiltersEnabled(false)
@@ -102,6 +108,10 @@ public class TestHiveClientConfig
                 .setSkipDeletionForAlter(false)
                 .setSkipTargetCleanupOnRollback(false)
                 .setBucketExecutionEnabled(true)
+                .setIgnoreTableBucketing(false)
+                .setMaxBucketsForGroupedExecution(1_000_000)
+                .setSortedWriteToTempPathEnabled(false)
+                .setSortedWriteTempPathSubdirectoryCount(10)
                 .setFileSystemMaxCacheSize(1000)
                 .setTableStatisticsEnabled(true)
                 .setOptimizeMismatchedBucketCount(false)
@@ -119,8 +129,10 @@ public class TestHiveClientConfig
                 .setS3SelectPushdownMaxConnections(500)
                 .setTemporaryStagingDirectoryEnabled(true)
                 .setTemporaryStagingDirectoryPath("/tmp/presto-${USER}")
-                .setPreloadSplitsForGroupedExecution(false)
-                .setWritingStagingFilesEnabled(false));
+                .setTemporaryTableSchema("default")
+                .setTemporaryTableStorageFormat(ORC)
+                .setTemporaryTableCompressionCodec(SNAPPY)
+                .setPushdownFilterEnabled(false));
     }
 
     @Test
@@ -166,10 +178,12 @@ public class TestHiveClientConfig
                 .put("hive.write-validation-threads", "11")
                 .put("hive.force-local-scheduling", "true")
                 .put("hive.max-concurrent-file-renames", "100")
+                .put("hive.max-concurrent-zero-row-file-creations", "100")
                 .put("hive.assume-canonical-partition-keys", "true")
                 .put("hive.text.max-line-length", "13MB")
                 .put("hive.parquet.use-column-names", "true")
                 .put("hive.parquet.fail-on-corrupted-statistics", "false")
+                .put("hive.parquet.max-read-block-size", "66kB")
                 .put("hive.orc.use-column-names", "true")
                 .put("hive.orc.bloom-filters.enabled", "true")
                 .put("hive.orc.default-bloom-filter-fpp", "0.96")
@@ -191,6 +205,10 @@ public class TestHiveClientConfig
                 .put("hive.skip-target-cleanup-on-rollback", "true")
                 .put("hive.bucket-execution", "false")
                 .put("hive.sorted-writing", "false")
+                .put("hive.ignore-table-bucketing", "true")
+                .put("hive.max-buckets-for-grouped-execution", "100")
+                .put("hive.sorted-write-to-temp-path-enabled", "true")
+                .put("hive.sorted-write-temp-path-subdirectory-count", "50")
                 .put("hive.fs.cache.max-size", "1010")
                 .put("hive.table-statistics-enabled", "false")
                 .put("hive.optimize-mismatched-bucket-count", "true")
@@ -207,8 +225,10 @@ public class TestHiveClientConfig
                 .put("hive.s3select-pushdown.max-connections", "1234")
                 .put("hive.temporary-staging-directory-enabled", "false")
                 .put("hive.temporary-staging-directory-path", "updated")
-                .put("hive.preload-splits-for-grouped-execution", "true")
-                .put("hive.writing-staging-files-enabled", "true")
+                .put("hive.temporary-table-schema", "other")
+                .put("hive.temporary-table-storage-format", "DWRF")
+                .put("hive.temporary-table-compression-codec", "NONE")
+                .put("hive.pushdown-filter-enabled", "true")
                 .build();
 
         HiveClientConfig expected = new HiveClientConfig()
@@ -235,6 +255,7 @@ public class TestHiveClientConfig
                 .setWriterSortBufferSize(new DataSize(13, Unit.MEGABYTE))
                 .setForceLocalScheduling(true)
                 .setMaxConcurrentFileRenames(100)
+                .setMaxConcurrentZeroRowFileCreations(100)
                 .setRecursiveDirWalkerEnabled(true)
                 .setIpcPingInterval(new Duration(34, TimeUnit.SECONDS))
                 .setDfsTimeout(new Duration(33, TimeUnit.SECONDS))
@@ -243,7 +264,7 @@ public class TestHiveClientConfig
                 .setVerifyChecksum(false)
                 .setResourceConfigFiles(ImmutableList.of("/foo.xml", "/bar.xml"))
                 .setHiveStorageFormat(HiveStorageFormat.SEQUENCEFILE)
-                .setHiveCompressionCodec(HiveCompressionCodec.NONE)
+                .setCompressionCodec(HiveCompressionCodec.NONE)
                 .setRespectTableFormat(false)
                 .setImmutablePartitions(true)
                 .setMaxPartitionsPerWriter(222)
@@ -254,6 +275,7 @@ public class TestHiveClientConfig
                 .setTextMaxLineLength(new DataSize(13, Unit.MEGABYTE))
                 .setUseParquetColumnNames(true)
                 .setFailOnCorruptedParquetStatistics(false)
+                .setParquetMaxReadBlockSize(new DataSize(66, Unit.KILOBYTE))
                 .setUseOrcColumnNames(true)
                 .setAssumeCanonicalPartitionKeys(true)
                 .setOrcBloomFiltersEnabled(true)
@@ -276,6 +298,10 @@ public class TestHiveClientConfig
                 .setSkipTargetCleanupOnRollback(true)
                 .setBucketExecutionEnabled(false)
                 .setSortedWritingEnabled(false)
+                .setIgnoreTableBucketing(true)
+                .setMaxBucketsForGroupedExecution(100)
+                .setSortedWriteToTempPathEnabled(true)
+                .setSortedWriteTempPathSubdirectoryCount(50)
                 .setFileSystemMaxCacheSize(1010)
                 .setTableStatisticsEnabled(false)
                 .setOptimizeMismatchedBucketCount(true)
@@ -293,8 +319,10 @@ public class TestHiveClientConfig
                 .setS3SelectPushdownMaxConnections(1234)
                 .setTemporaryStagingDirectoryEnabled(false)
                 .setTemporaryStagingDirectoryPath("updated")
-                .setPreloadSplitsForGroupedExecution(true)
-                .setWritingStagingFilesEnabled(true);
+                .setTemporaryTableSchema("other")
+                .setTemporaryTableStorageFormat(DWRF)
+                .setTemporaryTableCompressionCodec(NONE)
+                .setPushdownFilterEnabled(true);
 
         ConfigAssertions.assertFullMapping(properties, expected);
     }

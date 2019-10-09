@@ -14,7 +14,6 @@
 package com.facebook.presto.execution;
 
 import com.facebook.presto.Session;
-import com.facebook.presto.connector.ConnectorId;
 import com.facebook.presto.cost.StatsAndCosts;
 import com.facebook.presto.execution.NodeTaskMap.PartitionedSplitCountTracker;
 import com.facebook.presto.execution.buffer.LazyOutputBuffer;
@@ -23,24 +22,28 @@ import com.facebook.presto.execution.buffer.OutputBuffers;
 import com.facebook.presto.memory.MemoryPool;
 import com.facebook.presto.memory.QueryContext;
 import com.facebook.presto.memory.context.SimpleLocalMemoryContext;
+import com.facebook.presto.metadata.InternalNode;
 import com.facebook.presto.metadata.Split;
-import com.facebook.presto.metadata.TableHandle;
 import com.facebook.presto.operator.StageExecutionDescriptor;
 import com.facebook.presto.operator.TaskContext;
 import com.facebook.presto.operator.TaskStats;
-import com.facebook.presto.spi.Node;
+import com.facebook.presto.spi.ConnectorId;
+import com.facebook.presto.spi.TableHandle;
 import com.facebook.presto.spi.memory.MemoryPoolId;
+import com.facebook.presto.spi.plan.PlanNode;
+import com.facebook.presto.spi.plan.PlanNodeId;
+import com.facebook.presto.spi.plan.TableScanNode;
+import com.facebook.presto.spi.predicate.TupleDomain;
+import com.facebook.presto.spi.relation.VariableReferenceExpression;
 import com.facebook.presto.spiller.SpillSpaceTracker;
 import com.facebook.presto.sql.planner.Partitioning;
 import com.facebook.presto.sql.planner.PartitioningScheme;
 import com.facebook.presto.sql.planner.PlanFragment;
-import com.facebook.presto.sql.planner.Symbol;
 import com.facebook.presto.sql.planner.plan.PlanFragmentId;
-import com.facebook.presto.sql.planner.plan.PlanNode;
-import com.facebook.presto.sql.planner.plan.PlanNodeId;
-import com.facebook.presto.sql.planner.plan.TableScanNode;
+import com.facebook.presto.testing.TestingHandle;
 import com.facebook.presto.testing.TestingMetadata.TestingColumnHandle;
 import com.facebook.presto.testing.TestingMetadata.TestingTableHandle;
+import com.facebook.presto.testing.TestingTransactionHandle;
 import com.google.common.collect.HashMultimap;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
@@ -63,7 +66,6 @@ import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.Set;
@@ -102,22 +104,25 @@ public class MockRemoteTaskFactory
         this.scheduledExecutor = scheduledExecutor;
     }
 
-    public MockRemoteTask createTableScanTask(TaskId taskId, Node newNode, List<Split> splits, PartitionedSplitCountTracker partitionedSplitCountTracker)
+    public MockRemoteTask createTableScanTask(TaskId taskId, InternalNode newNode, List<Split> splits, PartitionedSplitCountTracker partitionedSplitCountTracker)
     {
-        Symbol symbol = new Symbol("column");
+        VariableReferenceExpression variable = new VariableReferenceExpression("column", VARCHAR);
         PlanNodeId sourceId = new PlanNodeId("sourceId");
         PlanFragment testFragment = new PlanFragment(
-                new PlanFragmentId("test"),
+                new PlanFragmentId(0),
                 new TableScanNode(
                         sourceId,
-                        new TableHandle(new ConnectorId("test"), new TestingTableHandle()),
-                        ImmutableList.of(symbol),
-                        ImmutableMap.of(symbol, new TestingColumnHandle("column"))),
-                ImmutableMap.of(symbol, VARCHAR),
+                        new TableHandle(new ConnectorId("test"), new TestingTableHandle(), TestingTransactionHandle.create(), Optional.of(TestingHandle.INSTANCE)),
+                        ImmutableList.of(variable),
+                        ImmutableMap.of(variable, new TestingColumnHandle("column")),
+                        TupleDomain.all(),
+                        TupleDomain.all()),
+                ImmutableSet.of(variable),
                 SOURCE_DISTRIBUTION,
                 ImmutableList.of(sourceId),
-                new PartitioningScheme(Partitioning.create(SINGLE_DISTRIBUTION, ImmutableList.of()), ImmutableList.of(symbol)),
+                new PartitioningScheme(Partitioning.create(SINGLE_DISTRIBUTION, ImmutableList.of()), ImmutableList.of(variable)),
                 StageExecutionDescriptor.ungroupedExecution(),
+                false,
                 StatsAndCosts.empty(),
                 Optional.empty());
 
@@ -132,7 +137,7 @@ public class MockRemoteTaskFactory
     public MockRemoteTask createRemoteTask(
             Session session,
             TaskId taskId,
-            Node node,
+            InternalNode node,
             PlanFragment fragment,
             Multimap<PlanNodeId, Split> initialSplits,
             OptionalInt totalPartitions,
@@ -346,9 +351,10 @@ public class MockRemoteTaskFactory
         {
             noMoreSplits.add(sourceId);
 
-            boolean allSourcesComplete = Stream.concat(fragment.getPartitionedSourceNodes().stream(), fragment.getRemoteSourceNodes().stream())
-                    .filter(Objects::nonNull)
-                    .map(PlanNode::getId)
+            boolean allSourcesComplete = Stream.concat(
+                    fragment.getTableScanSchedulingOrder().stream(),
+                    fragment.getRemoteSourceNodes().stream()
+                            .map(PlanNode::getId))
                     .allMatch(noMoreSplits::contains);
 
             if (allSourcesComplete) {
@@ -366,6 +372,12 @@ public class MockRemoteTaskFactory
         public void setOutputBuffers(OutputBuffers outputBuffers)
         {
             outputBuffer.setOutputBuffers(outputBuffers);
+        }
+
+        @Override
+        public ListenableFuture<?> removeRemoteSource(TaskId remoteSourceTaskId)
+        {
+            throw new UnsupportedOperationException();
         }
 
         @Override
@@ -414,8 +426,8 @@ public class MockRemoteTaskFactory
             }
             synchronized (this) {
                 int count = 0;
-                for (PlanNodeId partitionedSource : fragment.getPartitionedSources()) {
-                    Collection<Split> partitionedSplits = splits.get(partitionedSource);
+                for (PlanNodeId tableScanPlanNodeId : fragment.getTableScanSchedulingOrder()) {
+                    Collection<Split> partitionedSplits = splits.get(tableScanPlanNodeId);
                     count += partitionedSplits.size();
                 }
                 return count;

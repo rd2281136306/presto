@@ -18,6 +18,7 @@ import com.facebook.presto.spi.ColumnMetadata;
 import com.facebook.presto.spi.ConnectorInsertTableHandle;
 import com.facebook.presto.spi.ConnectorNewTableLayout;
 import com.facebook.presto.spi.ConnectorOutputTableHandle;
+import com.facebook.presto.spi.ConnectorPushdownFilterResult;
 import com.facebook.presto.spi.ConnectorResolvedIndex;
 import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.ConnectorTableHandle;
@@ -31,7 +32,9 @@ import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.SchemaTableName;
 import com.facebook.presto.spi.SchemaTablePrefix;
 import com.facebook.presto.spi.SystemTable;
+import com.facebook.presto.spi.api.Experimental;
 import com.facebook.presto.spi.predicate.TupleDomain;
+import com.facebook.presto.spi.relation.RowExpression;
 import com.facebook.presto.spi.security.GrantInfo;
 import com.facebook.presto.spi.security.PrestoPrincipal;
 import com.facebook.presto.spi.security.Privilege;
@@ -123,14 +126,71 @@ public interface ConnectorMetadata
     }
 
     /**
+     * Experimental: if true, the engine will invoke pushdownFilter instead of getTableLayouts.
+     *
+     * This interface can be replaced with a connector optimizer rule once the engine supports these (#12546).
+     */
+    @Experimental
+    default boolean isPushdownFilterSupported(ConnectorSession session, ConnectorTableHandle tableHandle)
+    {
+        return false;
+    }
+
+    /**
+     * Experimental: returns table layout that encapsulates the given filter.
+     *
+     * This interface can be replaced with a connector optimizer rule once the engine supports these (#12546).
+     */
+    @Experimental
+    default ConnectorPushdownFilterResult pushdownFilter(ConnectorSession session, ConnectorTableHandle tableHandle, RowExpression filter, Optional<ConnectorTableLayoutHandle> currentLayoutHandle)
+    {
+        throw new UnsupportedOperationException();
+    }
+
+    /**
      * Return a partitioning handle which the connector can transparently convert both {@code left} and {@code right} into.
      */
+    @Deprecated
     default Optional<ConnectorPartitioningHandle> getCommonPartitioningHandle(ConnectorSession session, ConnectorPartitioningHandle left, ConnectorPartitioningHandle right)
     {
         if (left.equals(right)) {
             return Optional.of(left);
         }
         return Optional.empty();
+    }
+
+    /**
+     * Partitioning <code>a = {a_1, ... a_n}</code> is considered as a refined partitioning over
+     * partitioning <code>b = {b_1, ... b_m}</code> if:
+     * <ul>
+     * <li> n >= m </li>
+     * <li> For every partition <code>b_i</code> in partitioning <code>b</code>,
+     *      the rows it contains is the same as union of a set of partitions <code>a_{i_1}, a_{i_2}, ... a_{i_k}</code>
+     *      in partitioning <code>a</code>, i.e.
+     *      <p>
+     *          <code>b_i = a_{i_1} + a_{i_2} + ... + a_{i_k}</code>
+     * <li> Connector can transparently convert partitioning <code>a</code> to partitioning <code>b</code>
+     *      associated with the provided table layout handle.
+     * </ul>
+     *
+     * <p>
+     * For example, consider two partitioning over <code>order</code> table:
+     * <ul>
+     * <li> partitioning <code>a</code> has 256 partitions by <code>orderkey % 256</code>
+     * <li> partitioning <code>b</code> has 128 partitions by <code>orderkey % 128</code>
+     * </ul>
+     *
+     * <p>
+     * Partitioning <code>a</code> is a refined partitioning over <code>b</code> if Connector supports
+     * transparently convert <code>a</code> to <code>b</code>.
+     * <p>
+     * Refined-over relation is reflexive.
+     * <p>
+     * This SPI is unstable and subject to change in the future.
+     */
+    default boolean isRefinedPartitioningOver(ConnectorSession session, ConnectorPartitioningHandle left, ConnectorPartitioningHandle right)
+    {
+        return left.equals(right);
     }
 
     /**
@@ -197,9 +257,9 @@ public interface ConnectorMetadata
     Map<SchemaTableName, List<ColumnMetadata>> listTableColumns(ConnectorSession session, SchemaTablePrefix prefix);
 
     /**
-     * Get statistics for table for given filtering constraint.
+     * Get statistics for table for given columns and filtering constraint.
      */
-    default TableStatistics getTableStatistics(ConnectorSession session, ConnectorTableHandle tableHandle, Constraint<ColumnHandle> constraint)
+    default TableStatistics getTableStatistics(ConnectorSession session, ConnectorTableHandle tableHandle, List<ColumnHandle> columnHandles, Constraint<ColumnHandle> constraint)
     {
         return TableStatistics.empty();
     }
@@ -238,6 +298,18 @@ public interface ConnectorMetadata
     default void createTable(ConnectorSession session, ConnectorTableMetadata tableMetadata, boolean ignoreExisting)
     {
         throw new PrestoException(NOT_SUPPORTED, "This connector does not support creating tables");
+    }
+
+    /**
+     * Creates a temporary table with optional partitioning requirements.
+     * Temporary table might have different default storage format, compression scheme, replication factor, etc,
+     * and gets automatically dropped when the transaction ends.
+     *
+     * This SPI is unstable and subject to change in the future.
+     */
+    default ConnectorTableHandle createTemporaryTable(ConnectorSession session, List<ColumnMetadata> columns, Optional<ConnectorPartitioningMetadata> partitioningMetadata)
+    {
+        throw new PrestoException(NOT_SUPPORTED, "This connector does not support creating temporary tables");
     }
 
     /**
@@ -466,7 +538,7 @@ public interface ConnectorMetadata
     /**
      * @return whether delete without table scan is supported
      */
-    default boolean supportsMetadataDelete(ConnectorSession session, ConnectorTableHandle tableHandle, ConnectorTableLayoutHandle tableLayoutHandle)
+    default boolean supportsMetadataDelete(ConnectorSession session, ConnectorTableHandle tableHandle)
     {
         throw new PrestoException(NOT_SUPPORTED, "This connector does not support deletes");
     }
@@ -581,5 +653,27 @@ public interface ConnectorMetadata
     default List<GrantInfo> listTablePrivileges(ConnectorSession session, SchemaTablePrefix prefix)
     {
         return emptyList();
+    }
+
+    /**
+     * Commits partition for table creation.
+     * To enable recoverable grouped execution, it is required that output connector supports partition commit.
+     * This method is unstable and subject to change in the future.
+     */
+    @Experimental
+    default void commitPartition(ConnectorSession session, ConnectorOutputTableHandle tableHandle, Collection<Slice> fragments)
+    {
+        throw new PrestoException(NOT_SUPPORTED, "This connector does not support partition commit");
+    }
+
+    /**
+     * Commits partition for table insertion.
+     * To enable recoverable grouped execution, it is required that output connector supports partition commit.
+     * This method is unstable and subject to change in the future.
+     */
+    @Experimental
+    default void commitPartition(ConnectorSession session, ConnectorInsertTableHandle tableHandle, Collection<Slice> fragments)
+    {
+        throw new PrestoException(NOT_SUPPORTED, "This connector does not support partition commit");
     }
 }

@@ -15,15 +15,16 @@ package com.facebook.presto.execution;
 
 import com.facebook.presto.Session;
 import com.facebook.presto.client.FailureInfo;
-import com.facebook.presto.connector.ConnectorId;
 import com.facebook.presto.execution.warnings.WarningCollector;
 import com.facebook.presto.memory.VersionedMemoryPoolId;
 import com.facebook.presto.metadata.Metadata;
 import com.facebook.presto.metadata.MetadataManager;
 import com.facebook.presto.security.AccessControl;
 import com.facebook.presto.security.AccessControlManager;
+import com.facebook.presto.spi.ConnectorId;
 import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.memory.MemoryPoolId;
+import com.facebook.presto.spi.resourceGroups.QueryType;
 import com.facebook.presto.spi.resourceGroups.ResourceGroupId;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.transaction.TransactionManager;
@@ -74,7 +75,7 @@ public class TestQueryStateMachine
     private static final String QUERY = "sql";
     private static final URI LOCATION = URI.create("fake://fake-query");
     private static final SQLException FAILED_CAUSE = new SQLException("FAILED");
-    private static final List<Input> INPUTS = ImmutableList.of(new Input(new ConnectorId("connector"), "schema", "table", Optional.empty(), ImmutableList.of(new Column("a", "varchar"))));
+    private static final List<Input> INPUTS = ImmutableList.of(new Input(new ConnectorId("connector"), "schema", "table", Optional.empty(), ImmutableList.of(new Column("a", "varchar")), Optional.empty()));
     private static final Optional<Output> OUTPUT = Optional.empty();
     private static final List<String> OUTPUT_FIELD_NAMES = ImmutableList.of("a", "b", "c");
     private static final List<Type> OUTPUT_FIELD_TYPES = ImmutableList.of(BIGINT, BIGINT, BIGINT);
@@ -85,6 +86,7 @@ public class TestQueryStateMachine
             .put("drink", "coffee")
             .build();
     private static final List<String> RESET_SESSION_PROPERTIES = ImmutableList.of("candy");
+    private static final Optional<QueryType> QUERY_TYPE = Optional.of(QueryType.SELECT);
 
     private final ExecutorService executor = newCachedThreadPool();
 
@@ -403,6 +405,7 @@ public class TestQueryStateMachine
         assertEquals(queryInfo.getFieldNames(), OUTPUT_FIELD_NAMES);
         assertEquals(queryInfo.getUpdateType(), UPDATE_TYPE);
         assertEquals(queryInfo.getMemoryPool(), MEMORY_POOL.getId());
+        assertEquals(queryInfo.getQueryType(), QUERY_TYPE);
 
         QueryStats queryStats = queryInfo.getQueryStats();
         assertNotNull(queryStats.getElapsedTime());
@@ -462,6 +465,7 @@ public class TestQueryStateMachine
                 TEST_SESSION,
                 LOCATION,
                 new ResourceGroupId("test"),
+                QUERY_TYPE,
                 false,
                 transactionManager,
                 accessControl,

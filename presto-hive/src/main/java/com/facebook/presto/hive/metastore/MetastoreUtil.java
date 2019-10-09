@@ -20,7 +20,7 @@ import com.facebook.presto.hive.TableOfflineException;
 import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.SchemaTableName;
 import com.facebook.presto.spi.TableNotFoundException;
-import com.google.common.util.concurrent.ListenableFuture;
+import com.google.common.collect.ImmutableList;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hive.common.FileUtils;
@@ -38,9 +38,6 @@ import static com.facebook.presto.hive.HiveSplitManager.PRESTO_OFFLINE;
 import static com.facebook.presto.spi.StandardErrorCode.NOT_SUPPORTED;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Strings.isNullOrEmpty;
-import static com.google.common.util.concurrent.Futures.whenAllSucceed;
-import static com.google.common.util.concurrent.MoreExecutors.directExecutor;
-import static io.airlift.concurrent.MoreFutures.getFutureValue;
 import static java.lang.String.format;
 import static java.util.stream.Collectors.toList;
 import static org.apache.hadoop.hive.metastore.MetaStoreUtils.typeToThriftType;
@@ -90,11 +87,11 @@ public class MetastoreUtil
                 table.getPartitionColumns());
     }
 
-    private static Properties getHiveSchema(
-            Storage sd,
-            List<Column> dataColumns,
+    public static Properties getHiveSchema(
+            Storage storage,
+            List<Column> partitionDataColumns,
             List<Column> tableDataColumns,
-            Map<String, String> parameters,
+            Map<String, String> tableParameters,
             String databaseName,
             String tableName,
             List<Column> partitionKeys)
@@ -104,24 +101,27 @@ public class MetastoreUtil
 
         Properties schema = new Properties();
 
-        schema.setProperty(FILE_INPUT_FORMAT, sd.getStorageFormat().getInputFormat());
-        schema.setProperty(FILE_OUTPUT_FORMAT, sd.getStorageFormat().getOutputFormat());
+        schema.setProperty(FILE_INPUT_FORMAT, storage.getStorageFormat().getInputFormat());
+        schema.setProperty(FILE_OUTPUT_FORMAT, storage.getStorageFormat().getOutputFormat());
 
         schema.setProperty(META_TABLE_NAME, databaseName + "." + tableName);
-        schema.setProperty(META_TABLE_LOCATION, sd.getLocation());
+        schema.setProperty(META_TABLE_LOCATION, storage.getLocation());
 
-        if (sd.getBucketProperty().isPresent()) {
-            schema.setProperty(BUCKET_FIELD_NAME, sd.getBucketProperty().get().getBucketedBy().get(0));
-            schema.setProperty(BUCKET_COUNT, Integer.toString(sd.getBucketProperty().get().getBucketCount()));
+        if (storage.getBucketProperty().isPresent()) {
+            List<String> bucketedBy = storage.getBucketProperty().get().getBucketedBy();
+            if (!bucketedBy.isEmpty()) {
+                schema.setProperty(BUCKET_FIELD_NAME, bucketedBy.get(0));
+            }
+            schema.setProperty(BUCKET_COUNT, Integer.toString(storage.getBucketProperty().get().getBucketCount()));
         }
         else {
             schema.setProperty(BUCKET_COUNT, "0");
         }
 
-        for (Map.Entry<String, String> param : sd.getSerdeParameters().entrySet()) {
+        for (Map.Entry<String, String> param : storage.getSerdeParameters().entrySet()) {
             schema.setProperty(param.getKey(), (param.getValue() != null) ? param.getValue() : "");
         }
-        schema.setProperty(SERIALIZATION_LIB, sd.getStorageFormat().getSerDe());
+        schema.setProperty(SERIALIZATION_LIB, storage.getStorageFormat().getSerDe());
 
         StringBuilder columnNameBuilder = new StringBuilder();
         StringBuilder columnTypeBuilder = new StringBuilder();
@@ -144,7 +144,7 @@ public class MetastoreUtil
         schema.setProperty(META_TABLE_COLUMN_TYPES, columnTypes);
         schema.setProperty("columns.comments", columnCommentBuilder.toString());
 
-        schema.setProperty(SERIALIZATION_DDL, toThriftDdl(tableName, dataColumns));
+        schema.setProperty(SERIALIZATION_DDL, toThriftDdl(tableName, partitionDataColumns));
 
         String partString = "";
         String partStringSep = "";
@@ -165,8 +165,8 @@ public class MetastoreUtil
             schema.setProperty(META_TABLE_PARTITION_COLUMN_TYPES, partTypesString);
         }
 
-        if (parameters != null) {
-            for (Map.Entry<String, String> entry : parameters.entrySet()) {
+        if (tableParameters != null) {
+            for (Map.Entry<String, String> entry : tableParameters.entrySet()) {
                 // add non-null parameters to the schema
                 if (entry.getValue() != null) {
                     schema.setProperty(entry.getKey(), entry.getValue());
@@ -175,6 +175,50 @@ public class MetastoreUtil
         }
 
         return schema;
+    }
+
+    public static Properties getHiveSchema(Map<String, String> serdeParameters, Map<String, String> tableParameters)
+    {
+        Properties schema = new Properties();
+        for (Map.Entry<String, String> param : serdeParameters.entrySet()) {
+            schema.setProperty(param.getKey(), (param.getValue() != null) ? param.getValue() : "");
+        }
+        for (Map.Entry<String, String> entry : tableParameters.entrySet()) {
+            // add non-null parameters to the schema
+            if (entry.getValue() != null) {
+                schema.setProperty(entry.getKey(), entry.getValue());
+            }
+        }
+        return schema;
+    }
+
+    /**
+     * Recreates partition schema based on the table schema and the column
+     * coercions map.
+     *
+     * partitionColumnCount is needed to handle cases when the partition
+     * has less columns than the table.
+     *
+     * If the partition has more columns than the table does, the partitionSchemaDifference
+     * map is expected to contain information for the missing columns.
+     */
+    public static List<Column> reconstructPartitionSchema(List<Column> tableSchema, int partitionColumnCount, Map<Integer, Column> partitionSchemaDifference)
+    {
+        ImmutableList.Builder<Column> columns = ImmutableList.builder();
+        for (int i = 0; i < partitionColumnCount; i++) {
+            Column column = partitionSchemaDifference.get(i);
+            if (column == null) {
+                checkArgument(
+                        i < tableSchema.size(),
+                        "column descriptor for column with hiveColumnIndex %s not found: tableSchema: %s, partitionSchemaDifference: %s",
+                        i,
+                        tableSchema,
+                        partitionSchemaDifference);
+                column = tableSchema.get(i);
+            }
+            columns.add(column);
+        }
+        return columns.build();
     }
 
     public static ProtectMode getProtectMode(Partition partition)
@@ -294,17 +338,5 @@ public class MetastoreUtil
     private static String getRenameErrorMessage(Path source, Path target)
     {
         return format("Error moving data files from %s to final location %s", source, target);
-    }
-
-    public static void waitForListenableFutures(List<ListenableFuture<?>> listenableFutures)
-    {
-        ListenableFuture<?> listenableFutureAggregate = whenAllSucceed(listenableFutures).call(() -> null, directExecutor());
-        try {
-            getFutureValue(listenableFutureAggregate);
-        }
-        catch (RuntimeException e) {
-            listenableFutureAggregate.cancel(true);
-            throw e;
-        }
     }
 }

@@ -20,8 +20,8 @@ import com.facebook.presto.operator.DriverContext;
 import com.facebook.presto.operator.OperatorContext;
 import com.facebook.presto.operator.TaskContext;
 import com.facebook.presto.spi.QueryId;
+import com.facebook.presto.spi.plan.PlanNodeId;
 import com.facebook.presto.spiller.SpillSpaceTracker;
-import com.facebook.presto.sql.planner.plan.PlanNodeId;
 import com.facebook.presto.testing.LocalQueryRunner;
 import com.google.common.collect.ImmutableMap;
 import io.airlift.stats.TestingGcMonitor;
@@ -111,7 +111,7 @@ public class TestQueryContext
         MemoryPool reservedPool = new MemoryPool(RESERVED_POOL, new DataSize(10_000, BYTE));
         QueryId queryId = new QueryId("query");
         QueryContext queryContext = createQueryContext(queryId, generalPool);
-        TaskStateMachine taskStateMachine = new TaskStateMachine(TaskId.valueOf("task-id"), TEST_EXECUTOR);
+        TaskStateMachine taskStateMachine = new TaskStateMachine(TaskId.valueOf("queryid.0.0.0"), TEST_EXECUTOR);
         TaskContext taskContext = queryContext.addTaskContext(taskStateMachine, TEST_SESSION, false, false, OptionalInt.empty(), false);
         DriverContext driverContext = taskContext.addPipelineContext(0, false, false, false).addDriverContext();
         OperatorContext operatorContext = driverContext.addOperatorContext(0, new PlanNodeId("test"), "test");
@@ -120,13 +120,13 @@ public class TestQueryContext
         LocalMemoryContext memoryContext = operatorContext.aggregateUserMemoryContext().newLocalMemoryContext("test_context");
         memoryContext.setBytes(1_000);
 
-        Map<String, Long> allocations = generalPool.getTaggedMemoryAllocations().get(queryId);
+        Map<String, Long> allocations = generalPool.getTaggedMemoryAllocations(queryId);
         assertEquals(allocations, ImmutableMap.of("test_context", 1_000L));
 
         queryContext.setMemoryPool(reservedPool);
 
-        assertNull(generalPool.getTaggedMemoryAllocations().get(queryId));
-        allocations = reservedPool.getTaggedMemoryAllocations().get(queryId);
+        assertNull(generalPool.getTaggedMemoryAllocations(queryId));
+        allocations = reservedPool.getTaggedMemoryAllocations(queryId);
         assertEquals(allocations, ImmutableMap.of("test_context", 1_000L));
 
         assertEquals(generalPool.getFreeBytes(), 10_000);

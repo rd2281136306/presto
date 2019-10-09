@@ -28,8 +28,8 @@ import com.facebook.presto.operator.TaskContext;
 import com.facebook.presto.operator.TaskStats;
 import com.facebook.presto.spi.QueryId;
 import com.facebook.presto.spi.memory.MemoryPoolId;
+import com.facebook.presto.spi.plan.PlanNodeId;
 import com.facebook.presto.spiller.SpillSpaceTracker;
-import com.facebook.presto.sql.planner.plan.PlanNodeId;
 import io.airlift.stats.TestingGcMonitor;
 import io.airlift.units.DataSize;
 import org.testng.annotations.AfterClass;
@@ -108,7 +108,7 @@ public class TestMemoryTracking
                 queryMaxSpillSize,
                 spillSpaceTracker);
         taskContext = queryContext.addTaskContext(
-                new TaskStateMachine(new TaskId("query", 0, 0), notificationExecutor),
+                new TaskStateMachine(new TaskId("query", 0, 0, 0), notificationExecutor),
                 testSessionBuilder().build(),
                 true,
                 true,

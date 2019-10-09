@@ -13,6 +13,7 @@
  */
 package com.facebook.presto.connector.thrift;
 
+import com.facebook.drift.client.DriftClient;
 import com.facebook.presto.connector.thrift.api.PrestoThriftId;
 import com.facebook.presto.connector.thrift.api.PrestoThriftNullableToken;
 import com.facebook.presto.connector.thrift.api.PrestoThriftPageResult;
@@ -28,7 +29,6 @@ import com.facebook.presto.spi.RecordSet;
 import com.facebook.presto.spi.type.Type;
 import com.google.common.collect.ImmutableList;
 import com.google.common.util.concurrent.ListenableFuture;
-import io.airlift.drift.client.DriftClient;
 
 import javax.annotation.Nullable;
 
@@ -77,6 +77,7 @@ public class ThriftIndexPageSource
 
     private final AtomicLong readTimeNanos = new AtomicLong(0);
     private long completedBytes;
+    private long completedPositions;
 
     private CompletableFuture<?> statusFuture;
     private ListenableFuture<PrestoThriftSplitBatch> splitFuture;
@@ -144,6 +145,12 @@ public class ThriftIndexPageSource
     }
 
     @Override
+    public long getCompletedPositions()
+    {
+        return completedPositions;
+    }
+
+    @Override
     public long getReadTimeNanos()
     {
         return readTimeNanos.get();
@@ -206,6 +213,7 @@ public class ThriftIndexPageSource
         if (page != null) {
             long pageSize = page.getSizeInBytes();
             completedBytes += pageSize;
+            completedPositions += page.getPositionCount();
             stats.addIndexPageSize(pageSize);
         }
         else {

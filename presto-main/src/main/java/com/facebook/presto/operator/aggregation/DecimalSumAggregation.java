@@ -13,6 +13,7 @@
  */
 package com.facebook.presto.operator.aggregation;
 
+import com.facebook.presto.bytecode.DynamicClassLoader;
 import com.facebook.presto.metadata.BoundVariables;
 import com.facebook.presto.metadata.FunctionManager;
 import com.facebook.presto.metadata.SqlAggregationFunction;
@@ -31,7 +32,6 @@ import com.facebook.presto.spi.type.TypeManager;
 import com.facebook.presto.spi.type.UnscaledDecimal128Arithmetic;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
-import io.airlift.bytecode.DynamicClassLoader;
 import io.airlift.slice.Slice;
 
 import java.lang.invoke.MethodHandle;
@@ -83,8 +83,8 @@ public class DecimalSumAggregation
     @Override
     public InternalAggregationFunction specialize(BoundVariables boundVariables, int arity, TypeManager typeManager, FunctionManager functionManager)
     {
-        Type inputType = typeManager.getType(getOnlyElement(applyBoundVariables(getSignature().getArgumentTypes(), boundVariables)));
-        Type outputType = typeManager.getType(applyBoundVariables(getSignature().getReturnType(), boundVariables));
+        Type inputType = getOnlyElement(applyBoundVariables(typeManager, getSignature().getArgumentTypes(), boundVariables));
+        Type outputType = applyBoundVariables(typeManager, getSignature().getReturnType(), boundVariables);
         return generateAggregation(inputType, outputType);
     }
 

@@ -17,10 +17,12 @@ import com.facebook.presto.execution.Lifespan;
 import com.facebook.presto.execution.scheduler.SourceScheduler;
 import com.google.common.util.concurrent.SettableFuture;
 
+import java.util.List;
+
 public interface LifespanScheduler
 {
     // Thread Safety:
-    // * Invocation of onLifespanFinished can be parallel and in any thread.
+    // * Invocation of onLifespanExecutionFinished can be parallel and in any thread.
     //   There may be multiple invocations in flight at the same time,
     //   and may overlap with any other methods.
     // * Invocation of schedule happens sequentially in a single thread.
@@ -28,7 +30,11 @@ public interface LifespanScheduler
 
     void scheduleInitial(SourceScheduler scheduler);
 
-    void onLifespanFinished(Iterable<Lifespan> newlyCompletedDriverGroups);
+    void onLifespanExecutionFinished(Iterable<Lifespan> newlyCompletelyExecutedDriverGroups);
+
+    void onTaskFailed(int taskId, List<SourceScheduler> sourceSchedulers);
 
     SettableFuture schedule(SourceScheduler scheduler);
+
+    boolean allLifespanExecutionFinished();
 }

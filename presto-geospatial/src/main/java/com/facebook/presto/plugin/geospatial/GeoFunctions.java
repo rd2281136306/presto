@@ -30,7 +30,6 @@ import com.esri.core.geometry.ogc.OGCConcreteGeometryCollection;
 import com.esri.core.geometry.ogc.OGCGeometry;
 import com.esri.core.geometry.ogc.OGCGeometryCollection;
 import com.esri.core.geometry.ogc.OGCLineString;
-import com.esri.core.geometry.ogc.OGCMultiPolygon;
 import com.esri.core.geometry.ogc.OGCPoint;
 import com.esri.core.geometry.ogc.OGCPolygon;
 import com.facebook.presto.geospatial.GeometryType;
@@ -291,7 +290,7 @@ public final class GeoFunctions
     {
         // "every point in input is in range" <=> "the envelope of input is in range"
         Envelope envelope = deserializeEnvelope(input);
-        if (envelope != null) {
+        if (!envelope.isEmpty()) {
             checkLatitude(envelope.getYMin());
             checkLatitude(envelope.getYMax());
             checkLongitude(envelope.getXMin());
@@ -384,33 +383,7 @@ public final class GeoFunctions
             return serialize(createFromEsriGeometry(new Point(), geometry.getEsriSpatialReference()));
         }
 
-        Point centroid;
-        try {
-            switch (geometryType) {
-                case MULTI_POINT:
-                    centroid = computePointsCentroid((MultiVertexGeometry) geometry.getEsriGeometry());
-                    break;
-                case LINE_STRING:
-                case MULTI_LINE_STRING:
-                    centroid = computeLineCentroid((Polyline) geometry.getEsriGeometry());
-                    break;
-                case POLYGON:
-                    centroid = computePolygonCentroid((Polygon) geometry.getEsriGeometry());
-                    break;
-                case MULTI_POLYGON:
-                    centroid = computeMultiPolygonCentroid((OGCMultiPolygon) geometry);
-                    break;
-                default:
-                    throw new PrestoException(INVALID_FUNCTION_ARGUMENT, "Unexpected geometry type: " + geometryType);
-            }
-        }
-        catch (RuntimeException e) {
-            if (e instanceof PrestoException && ((PrestoException) e).getErrorCode() == INVALID_FUNCTION_ARGUMENT.toErrorCode()) {
-                throw e;
-            }
-            throw new PrestoException(INVALID_FUNCTION_ARGUMENT, format("Cannot compute centroid: %s Use ST_IsValid to confirm that input geometry is valid or compute centroid for a bounding box using ST_Envelope.", e.getMessage()), e);
-        }
-        return serialize(createFromEsriGeometry(centroid, geometry.getEsriSpatialReference()));
+        return serialize(geometry.centroid());
     }
 
     @Description("Returns the minimum convex geometry that encloses all input geometries")
@@ -470,8 +443,7 @@ public final class GeoFunctions
     @SqlType(BOOLEAN)
     public static Boolean stIsEmpty(@SqlType(GEOMETRY_TYPE_NAME) Slice input)
     {
-        Envelope envelope = deserializeEnvelope(input);
-        return envelope == null || envelope.isEmpty();
+        return deserializeEnvelope(input).isEmpty();
     }
 
     @Description("Returns TRUE if this Geometry has no anomalous geometric points, such as self intersection or self tangency")
@@ -582,7 +554,7 @@ public final class GeoFunctions
     public static Double stXMax(@SqlType(GEOMETRY_TYPE_NAME) Slice input)
     {
         Envelope envelope = deserializeEnvelope(input);
-        if (envelope == null) {
+        if (envelope.isEmpty()) {
             return null;
         }
         return envelope.getXMax();
@@ -595,7 +567,7 @@ public final class GeoFunctions
     public static Double stYMax(@SqlType(GEOMETRY_TYPE_NAME) Slice input)
     {
         Envelope envelope = deserializeEnvelope(input);
-        if (envelope == null) {
+        if (envelope.isEmpty()) {
             return null;
         }
         return envelope.getYMax();
@@ -608,7 +580,7 @@ public final class GeoFunctions
     public static Double stXMin(@SqlType(GEOMETRY_TYPE_NAME) Slice input)
     {
         Envelope envelope = deserializeEnvelope(input);
-        if (envelope == null) {
+        if (envelope.isEmpty()) {
             return null;
         }
         return envelope.getXMin();
@@ -621,7 +593,7 @@ public final class GeoFunctions
     public static Double stYMin(@SqlType(GEOMETRY_TYPE_NAME) Slice input)
     {
         Envelope envelope = deserializeEnvelope(input);
-        if (envelope == null) {
+        if (envelope.isEmpty()) {
             return null;
         }
         return envelope.getYMin();
@@ -958,7 +930,7 @@ public final class GeoFunctions
     public static Slice stEnvelope(@SqlType(GEOMETRY_TYPE_NAME) Slice input)
     {
         Envelope envelope = deserializeEnvelope(input);
-        if (envelope == null) {
+        if (envelope.isEmpty()) {
             return EMPTY_POLYGON;
         }
         return serialize(envelope);
@@ -971,7 +943,7 @@ public final class GeoFunctions
     public static Block stEnvelopeAsPts(@SqlType(GEOMETRY_TYPE_NAME) Slice input)
     {
         Envelope envelope = deserializeEnvelope(input);
-        if (envelope == null) {
+        if (envelope.isEmpty()) {
             return null;
         }
         BlockBuilder blockBuilder = GEOMETRY.createBlockBuilder(null, 2);
@@ -1209,7 +1181,7 @@ public final class GeoFunctions
     public static Block spatialPartitions(@SqlType(KdbTreeType.NAME) Object kdbTree, @SqlType(GEOMETRY_TYPE_NAME) Slice geometry)
     {
         Envelope envelope = deserializeEnvelope(geometry);
-        if (envelope == null) {
+        if (envelope.isEmpty()) {
             // Empty geometry
             return null;
         }
@@ -1236,7 +1208,7 @@ public final class GeoFunctions
         }
 
         Envelope envelope = deserializeEnvelope(geometry);
-        if (envelope == null) {
+        if (envelope.isEmpty()) {
             return null;
         }
 
@@ -1360,124 +1332,11 @@ public final class GeoFunctions
         checkArgument(Objects.equals(leftGeometry.getEsriSpatialReference(), rightGeometry.getEsriSpatialReference()), "Input geometries must have the same spatial reference");
     }
 
-    // Points centroid is arithmetic mean of the input points
-    private static Point computePointsCentroid(MultiVertexGeometry multiVertex)
-    {
-        double xSum = 0;
-        double ySum = 0;
-        for (int i = 0; i < multiVertex.getPointCount(); i++) {
-            Point point = multiVertex.getPoint(i);
-            xSum += point.getX();
-            ySum += point.getY();
-        }
-        return new Point(xSum / multiVertex.getPointCount(), ySum / multiVertex.getPointCount());
-    }
-
-    // Lines centroid is weighted mean of each line segment, weight in terms of line length
-    private static Point computeLineCentroid(Polyline polyline)
-    {
-        double xSum = 0;
-        double ySum = 0;
-        double weightSum = 0;
-        for (int i = 0; i < polyline.getPathCount(); i++) {
-            Point startPoint = polyline.getPoint(polyline.getPathStart(i));
-            Point endPoint = polyline.getPoint(polyline.getPathEnd(i) - 1);
-            double dx = endPoint.getX() - startPoint.getX();
-            double dy = endPoint.getY() - startPoint.getY();
-            double length = sqrt(dx * dx + dy * dy);
-            weightSum += length;
-            xSum += (startPoint.getX() + endPoint.getX()) * length / 2;
-            ySum += (startPoint.getY() + endPoint.getY()) * length / 2;
-        }
-        return new Point(xSum / weightSum, ySum / weightSum);
-    }
-
-    // Polygon centroid: area weighted average of centroids in case of holes
-    private static Point computePolygonCentroid(Polygon polygon)
-    {
-        int pathCount = polygon.getPathCount();
-
-        if (pathCount == 1) {
-            return getPolygonSansHolesCentroid(polygon);
-        }
-
-        double xSum = 0;
-        double ySum = 0;
-        double areaSum = 0;
-
-        for (int i = 0; i < pathCount; i++) {
-            int startIndex = polygon.getPathStart(i);
-            int endIndex = polygon.getPathEnd(i);
-
-            Polygon sansHoles = getSubPolygon(polygon, startIndex, endIndex);
-
-            Point centroid = getPolygonSansHolesCentroid(sansHoles);
-            double area = sansHoles.calculateArea2D();
-
-            xSum += centroid.getX() * area;
-            ySum += centroid.getY() * area;
-            areaSum += area;
-        }
-
-        return new Point(xSum / areaSum, ySum / areaSum);
-    }
-
-    private static Polygon getSubPolygon(Polygon polygon, int startIndex, int endIndex)
-    {
-        Polyline boundary = new Polyline();
-        boundary.startPath(polygon.getPoint(startIndex));
-        for (int i = startIndex + 1; i < endIndex; i++) {
-            Point current = polygon.getPoint(i);
-            boundary.lineTo(current);
-        }
-
-        final Polygon newPolygon = new Polygon();
-        newPolygon.add(boundary, false);
-        return newPolygon;
-    }
-
-    // Polygon sans holes centroid:
-    // c[x] = (Sigma(x[i] + x[i + 1]) * (x[i] * y[i + 1] - x[i + 1] * y[i]), for i = 0 to N - 1) / (6 * signedArea)
-    // c[y] = (Sigma(y[i] + y[i + 1]) * (x[i] * y[i + 1] - x[i + 1] * y[i]), for i = 0 to N - 1) / (6 * signedArea)
-    private static Point getPolygonSansHolesCentroid(Polygon polygon)
-    {
-        int pointCount = polygon.getPointCount();
-        double xSum = 0;
-        double ySum = 0;
-        double signedArea = 0;
-        for (int i = 0; i < pointCount; i++) {
-            Point current = polygon.getPoint(i);
-            Point next = polygon.getPoint((i + 1) % polygon.getPointCount());
-            double ladder = current.getX() * next.getY() - next.getX() * current.getY();
-            xSum += (current.getX() + next.getX()) * ladder;
-            ySum += (current.getY() + next.getY()) * ladder;
-            signedArea += ladder / 2;
-        }
-        return new Point(xSum / (signedArea * 6), ySum / (signedArea * 6));
-    }
-
-    // MultiPolygon centroid is weighted mean of each polygon, weight in terms of polygon area
-    private static Point computeMultiPolygonCentroid(OGCMultiPolygon multiPolygon)
-    {
-        double xSum = 0;
-        double ySum = 0;
-        double weightSum = 0;
-        for (int i = 0; i < multiPolygon.numGeometries(); i++) {
-            Point centroid = computePolygonCentroid((Polygon) multiPolygon.geometryN(i).getEsriGeometry());
-            Polygon polygon = (Polygon) multiPolygon.geometryN(i).getEsriGeometry();
-            double weight = polygon.calculateArea2D();
-            weightSum += weight;
-            xSum += centroid.getX() * weight;
-            ySum += centroid.getY() * weight;
-        }
-        return new Point(xSum / weightSum, ySum / weightSum);
-    }
-
     private static boolean envelopes(Slice left, Slice right, EnvelopesPredicate predicate)
     {
         Envelope leftEnvelope = deserializeEnvelope(left);
         Envelope rightEnvelope = deserializeEnvelope(right);
-        if (leftEnvelope == null || rightEnvelope == null) {
+        if (leftEnvelope.isEmpty() || rightEnvelope.isEmpty()) {
             return false;
         }
         return predicate.apply(leftEnvelope, rightEnvelope);
@@ -1549,6 +1408,41 @@ public final class GeoFunctions
         // Math.abs is required here because for Polygons with a 2D area of 0
         // isExteriorRing returns false for the exterior ring
         return Math.abs(sphericalExcess * EARTH_RADIUS_M * EARTH_RADIUS_M);
+    }
+
+    @SqlNullable
+    @Description("Returns the great-circle length in meters of a linestring or multi-linestring on Earth's surface")
+    @ScalarFunction("ST_Length")
+    @SqlType(DOUBLE)
+    public static Double stSphericalLength(@SqlType(SPHERICAL_GEOGRAPHY_TYPE_NAME) Slice input)
+    {
+        OGCGeometry geometry = deserialize(input);
+        if (geometry.isEmpty()) {
+            return null;
+        }
+
+        validateSphericalType("ST_Length", geometry, EnumSet.of(LINE_STRING, MULTI_LINE_STRING));
+        MultiPath lineString = (MultiPath) geometry.getEsriGeometry();
+
+        double sum = 0;
+
+        // sum up paths on (multi)linestring
+        for (int path = 0; path < lineString.getPathCount(); path++) {
+            if (lineString.getPathSize(path) < 2) {
+                continue;
+            }
+
+            // sum up distances between adjacent points on this path
+            int pathStart = lineString.getPathStart(path);
+            Point prev = lineString.getPoint(pathStart);
+            for (int i = pathStart + 1; i < lineString.getPathEnd(path); i++) {
+                Point next = lineString.getPoint(i);
+                sum += greatCircleDistance(prev.getY(), prev.getX(), next.getY(), next.getX());
+                prev = next;
+            }
+        }
+
+        return sum * 1000;
     }
 
     private static double computeSphericalExcess(Polygon polygon, int start, int end)
